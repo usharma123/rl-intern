@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from agent.tools.algorithm_select import choose_algorithm
 from agent.tools.common import artifact_dir, load_sb3_class
@@ -13,6 +14,7 @@ def train_sb3(
     seed: int = 0,
     output_dir: str = "artifacts",
     log_dir: str = "runs",
+    run_dir: str | None = None,
 ) -> dict:
     env = None
     algo = algorithm.upper()
@@ -40,9 +42,13 @@ def train_sb3(
                 "warnings": warnings,
             }
 
-        run_dir = artifact_dir(env_id, algo, seed, output_dir)
-        run_log_dir = artifact_dir(env_id, algo, seed, log_dir)
-        run_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = Path(run_dir) if run_dir else artifact_dir(env_id, algo, seed, output_dir)
+        run_log_dir = (
+            artifact_path / "logs"
+            if run_dir
+            else artifact_dir(env_id, algo, seed, log_dir)
+        )
+        artifact_path.mkdir(parents=True, exist_ok=True)
         run_log_dir.mkdir(parents=True, exist_ok=True)
 
         config = TrainingConfig(
@@ -53,7 +59,7 @@ def train_sb3(
             log_dir=log_dir,
             output_dir=output_dir,
         )
-        config_path = run_dir / "config.json"
+        config_path = artifact_path / "config.json"
         config_path.write_text(
             json.dumps(config.model_dump(), indent=2), encoding="utf-8"
         )
@@ -69,7 +75,7 @@ def train_sb3(
             verbose=0,
         )
         model.learn(total_timesteps=total_timesteps)
-        model_path = run_dir / "model.zip"
+        model_path = artifact_path / "model.zip"
         model.save(str(model_path))
 
         return {

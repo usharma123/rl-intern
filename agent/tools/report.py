@@ -10,9 +10,12 @@ def _default_report_path(
     training_result: dict[str, Any],
     evaluation_result: dict[str, Any],
     output_path: str | None,
+    run_dir: str | None = None,
 ) -> Path:
     if output_path:
         return Path(output_path)
+    if run_dir:
+        return Path(run_dir) / "report.md"
     env_id = training_result.get("env_id") or evaluation_result.get("env_id") or "unknown-env"
     algorithm = (
         training_result.get("algorithm")
@@ -31,6 +34,7 @@ def generate_report(
     evaluation_result: dict,
     rollout_result: dict | None = None,
     output_path: str | None = None,
+    run_dir: str | None = None,
 ) -> dict:
     try:
         template_dir = Path(__file__).resolve().parents[2] / "rl_intern" / "templates"
@@ -41,7 +45,9 @@ def generate_report(
             lstrip_blocks=True,
         )
         template = env.get_template("report.md.j2")
-        report_path = _default_report_path(training_result, evaluation_result, output_path)
+        report_path = _default_report_path(
+            training_result, evaluation_result, output_path, run_dir=run_dir
+        )
         report_path.parent.mkdir(parents=True, exist_ok=True)
         content = template.render(
             env_result=env_result,

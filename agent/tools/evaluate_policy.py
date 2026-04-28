@@ -13,6 +13,7 @@ def evaluate_policy(
     model_path: str,
     episodes: int = 20,
     seed: int = 0,
+    run_dir: str | None = None,
 ) -> dict:
     env = None
     algo = algorithm.upper()
@@ -56,7 +57,9 @@ def evaluate_policy(
             seed=seed,
         ).model_dump()
         result["episode_rewards"] = rewards
-        results_path = artifact_dir(env_id, algo, seed) / "eval.json"
+        results_path = (
+            Path(run_dir) / "eval.json" if run_dir else artifact_dir(env_id, algo, seed) / "eval.json"
+        )
         results_path.parent.mkdir(parents=True, exist_ok=True)
         results_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
         result["results_path"] = str(results_path)

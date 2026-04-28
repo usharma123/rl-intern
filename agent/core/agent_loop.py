@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -185,10 +186,13 @@ class Handlers:
     @staticmethod
     async def run_agent(session: Session, text: str) -> str | None:
         session.reset_cancel()
+        if text:
+            session.current_turn_id = f"turn_{session.turn_count + 1:03d}_{uuid.uuid4().hex[:6]}"
         if text and session.pending_approval:
             await Handlers._abandon_pending_approval(session)
         if text:
             session.context_manager.add_message(Message(role="user", content=text))
+            await session.send_event(Event(event_type="user_input", data={"text": text}))
 
         await session.send_event(
             Event(event_type="processing", data={"message": "Processing user input"})
@@ -423,7 +427,16 @@ async def _execute_tools(
     if not tools:
         return
 
+    prepared_tools = []
     for tc, name, args in tools:
+        if session.run_dir and name in {
+            "train_sb3",
+            "evaluate_policy",
+            "record_rollout",
+            "generate_report",
+        }:
+            args = {**args, "run_dir": session.run_dir}
+        prepared_tools.append((tc, name, args))
         if state_events:
             await session.send_event(
                 Event(
@@ -443,7 +456,7 @@ async def _execute_tools(
         return tc, name, output, success
 
     results = await asyncio.gather(
-        *[run_one(tc, name, args) for tc, name, args in tools],
+        *[run_one(tc, name, args) for tc, name, args in prepared_tools],
         return_exceptions=True,
     )
 
@@ -498,6 +511,9 @@ async def submission_loop(
     session_holder: list | None = None,
     local_mode: bool = False,
     stream: bool = True,
+    run_id: str | None = None,
+    run_dir: str | None = None,
+    run_store: Any = None,
     **_: Any,
 ) -> None:
     tool_router = tool_router or ToolRouter(local_mode=local_mode)
@@ -507,6 +523,9 @@ async def submission_loop(
         tool_router=tool_router,
         local_mode=local_mode,
         stream=stream,
+        run_id=run_id,
+        run_dir=run_dir,
+        run_store=run_store,
     )
     if session_holder is not None:
         session_holder[0] = session

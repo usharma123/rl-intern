@@ -12,6 +12,7 @@ def record_rollout(
     seed: int = 0,
     max_steps: int = 1000,
     output_dir: str = "artifacts",
+    run_dir: str | None = None,
 ) -> dict:
     env = None
     algo = algorithm.upper()
@@ -57,7 +58,11 @@ def record_rollout(
                 "steps": steps,
             }
 
-        video_path = artifact_dir(env_id, algo, seed, output_dir) / "rollout.mp4"
+        video_path = (
+            Path(run_dir) / "rollout.mp4"
+            if run_dir
+            else artifact_dir(env_id, algo, seed, output_dir) / "rollout.mp4"
+        )
         video_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             imageio.mimsave(str(video_path), frames, fps=30)

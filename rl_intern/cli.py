@@ -14,6 +14,7 @@ from agent.config import load_config
 from agent.core.agent_loop import submission_loop
 from agent.core.session import OpType
 from agent.core.tools import ToolRouter
+from rl_intern.run_store import RunStore
 
 litellm.drop_params = True
 
@@ -56,6 +57,9 @@ async def _run_agent_prompt(
     event_queue: asyncio.Queue = asyncio.Queue()
     tool_router = ToolRouter(local_mode=True)
     session_holder: list = [None]
+    run_store = RunStore()
+    run_record = run_store.create_run(model=config.model_name, prompt=prompt)
+    print(f"Run: {run_record.run_id}", file=sys.stderr)
 
     agent_task = asyncio.create_task(
         submission_loop(
@@ -66,6 +70,9 @@ async def _run_agent_prompt(
             session_holder=session_holder,
             local_mode=True,
             stream=stream,
+            run_id=run_record.run_id,
+            run_dir=str(run_record.run_dir),
+            run_store=run_store,
         )
     )
 

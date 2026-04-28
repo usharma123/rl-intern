@@ -10,6 +10,8 @@ from typing import Any, Optional
 
 from agent.config import Config
 from agent.context_manager.manager import ContextManager
+from rl_intern.events import normalize_event
+from rl_intern.run_store import RunStore
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,9 @@ class Session:
         context_manager: ContextManager | None = None,
         local_mode: bool = False,
         stream: bool = True,
+        run_id: str | None = None,
+        run_dir: str | None = None,
+        run_store: RunStore | None = None,
         **_: Any,
     ):
         self.tool_router = tool_router
@@ -73,16 +78,22 @@ class Session:
         self.logged_events: list[dict[str, Any]] = []
         self.session_start_time = datetime.now().isoformat()
         self.turn_count = 0
+        self.run_id = run_id
+        self.run_dir = run_dir
+        self.run_store = run_store
+        self.current_turn_id: str | None = None
 
     async def send_event(self, event: Event) -> None:
         await self.event_queue.put(event)
-        self.logged_events.append(
-            {
-                "timestamp": datetime.now().isoformat(),
-                "event_type": event.event_type,
-                "data": event.data,
-            }
+        normalized = normalize_event(
+            event.event_type,
+            event.data,
+            run_id=self.run_id,
+            turn_id=self.current_turn_id,
         )
+        self.logged_events.append(normalized)
+        if self.run_store and self.run_id:
+            self.run_store.append_event(self.run_id, normalized)
 
     def cancel(self) -> None:
         self._cancelled.set()
