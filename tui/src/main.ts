@@ -1,4 +1,4 @@
-import { Box, Input, Text, createCliRenderer } from "@opentui/core"
+import { Box, Text, createCliRenderer } from "@opentui/core"
 import { Backend } from "./backend"
 import { applyEvent, createInitialState } from "./state"
 
@@ -17,10 +17,15 @@ backend.start(model)
 let prompt = ""
 
 function render() {
-  renderer.root.clear()
+  try {
+    renderer.root.remove("app")
+  } catch {
+    // First render has nothing to remove.
+  }
   renderer.root.add(
     Box(
       {
+        id: "app",
         flexDirection: "column",
         gap: 1,
         padding: 1,
@@ -48,27 +53,32 @@ function render() {
             content: `Approval required: press a to approve or r to reject ${String(state.pendingApprovals[0].tool)}`,
             fg: "#fca5a5",
           })
-        : Text({ content: "Enter prompt. Tab changes focus in a future build. Ctrl+C exits.", fg: "#cbd5e1" }),
-      Input({
-        placeholder: "train PPO on CartPole-v1 for 1000 timesteps...",
-        value: prompt,
-        onInput: (value: string) => {
-          prompt = value
-        },
-        onSubmit: (value: string) => {
-          if (value.trim()) backend.submit(value.trim())
-          prompt = ""
-        },
-      }),
+        : Text({ content: "Type a prompt. Enter submits. Backspace edits. Ctrl+C exits.", fg: "#cbd5e1" }),
+      Box(
+        { borderStyle: "single", padding: 1, width: "100%" },
+        Text({ content: prompt || "train PPO on CartPole-v1 for 1000 timesteps...", fg: prompt ? "#ffffff" : "#64748b" }),
+      ),
     ),
   )
-  renderer.render()
+  renderer.root.requestRender()
 }
 
-renderer.on("keypress", (event) => {
+renderer.keyInput.on("keypress", (event) => {
   if (event.ctrl && event.name === "c") {
     backend.shutdown()
     process.exit(0)
+  }
+  if (event.name === "return" || event.name === "enter") {
+    const value = prompt.trim()
+    if (value) backend.submit(value)
+    prompt = ""
+    render()
+    return
+  }
+  if (event.name === "backspace") {
+    prompt = prompt.slice(0, -1)
+    render()
+    return
   }
   if (event.name === "a" && state.pendingApprovals.length) {
     backend.approve(state.pendingApprovals[0].tool_call_id, true)
@@ -82,6 +92,10 @@ renderer.on("keypress", (event) => {
   }
   if (event.name === "v" && state.runId) {
     state.toolEvents.push(`Viewer: http://127.0.0.1:8765/runs/${state.runId}/viewer`)
+    render()
+  }
+  if (!event.ctrl && !event.meta && event.sequence && event.sequence.length === 1) {
+    prompt += event.sequence
     render()
   }
 })

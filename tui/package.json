@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@opentui/core": "^0.11.0"
+    "@opentui/core": "^0.1.106"
   },
   "devDependencies": {
     "@types/bun": "latest",
