@@ -110,18 +110,18 @@ class LLMTRLAdapter(DomainAdapter):
         blocked = _blocked_by_failed_inspect(run_dir)
         if blocked:
             return blocked
-        samples = [
-            {
-                "prompt": "Evaluation placeholder",
-                "completion": "Evaluation requires a task-specific harness.",
-                "score": None,
-            }
-        ]
+        generation_result = _read_modal_sample_generations(run_dir)
+        samples = generation_result.get("samples") or _default_eval_prompts()
+        status = generation_result.get("status", "pending_generation")
         result = {
             "method": _method(plan),
             "model": _input(plan, "model"),
             "samples": samples,
-            "metrics": {"status": "needs_task_specific_eval"},
+            "metrics": {
+                "status": status,
+                "sample_count": len(samples),
+                "source": generation_result.get("path", "default_prompts"),
+            },
         }
         _write_json(run_dir, "llm_eval.json", result, "metrics")
         if run_dir:
@@ -148,7 +148,24 @@ class LLMTRLAdapter(DomainAdapter):
             f"- Dataset valid: `{dataset.get('valid')}`",
             f"- Smoke test: `{smoke.get('passed')}`",
             f"- Eval status: `{eval_result.get('metrics', {}).get('status', 'unknown')}`",
+            f"- Eval samples: `{eval_result.get('metrics', {}).get('sample_count', 0)}`",
         ]
+        samples = eval_result.get("samples") or []
+        if samples:
+            report.extend(["", "## Sample Generations", ""])
+            for idx, sample in enumerate(samples[:3], start=1):
+                prompt = str(sample.get("prompt", "")).replace("\n", " ")
+                completion = str(sample.get("completion", "")).replace("\n", " ")
+                report.extend(
+                    [
+                        f"### Sample {idx}",
+                        "",
+                        f"Prompt: {prompt}",
+                        "",
+                        f"Completion: {completion}",
+                        "",
+                    ]
+                )
         if _method(plan) == "grpo":
             verifier = _read_json(run_dir, "llm_grpo_verifier.json")
             report.append(f"- GRPO verifier valid: `{verifier.get('valid')}`")
@@ -222,7 +239,9 @@ def _dependencies() -> list[str]:
 
 
 def _script_args(plan: ExperimentPlan, run_dir: str | None) -> list[str]:
-    output_dir = str(Path(run_dir or ".") / str(plan.inputs.get("output_dir", "llm_output")))
+    output_dir = str(plan.inputs.get("output_dir", "llm_output"))
+    if plan.runner.backend != "modal":
+        output_dir = str(Path(run_dir or ".") / output_dir)
     args = [
         "--model",
         str(_input(plan, "model")),
@@ -249,13 +268,19 @@ def _script_args(plan: ExperimentPlan, run_dir: str | None) -> list[str]:
     ]
     if plan.inputs.get("save_steps") is not None:
         args.extend(["--save-steps", str(plan.inputs["save_steps"])])
-    if bool(plan.inputs.get("fp16")):
+    if bool(plan.inputs.get("fp16")) or _default_fp16(plan):
         args.append("--fp16")
     if bool(plan.inputs.get("bf16")):
         args.append("--bf16")
     if _method(plan) == "grpo" and plan.reward.verifier_path:
         args.extend(["--verifier-path", plan.reward.verifier_path])
     return args
+
+
+def _default_fp16(plan: ExperimentPlan) -> bool:
+    if plan.inputs.get("bf16") is not None or plan.inputs.get("fp16") is not None:
+        return False
+    return plan.runner.backend == "modal" and "t4" in str(plan.runner.hardware).lower()
 
 
 def _write_json(
@@ -279,6 +304,31 @@ def _read_json(run_dir: str | None, filename: str) -> dict[str, Any]:
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _read_modal_sample_generations(run_dir: str | None) -> dict[str, Any]:
+    if not run_dir:
+        return {}
+    root = Path(run_dir) / "modal_artifacts"
+    if not root.exists():
+        return {}
+    for path in sorted(root.glob("*/sample_generations.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        payload["path"] = str(path)
+        return payload
+    return {}
+
+
+def _default_eval_prompts() -> list[dict[str, Any]]:
+    prompts = [
+        "### Human: Explain reinforcement learning in one paragraph.\n### Assistant:",
+        "### Human: Give two practical tips for training small language models.\n### Assistant:",
+        "### Human: What is overfitting?\n### Assistant:",
+    ]
+    return [{"prompt": prompt, "completion": None, "score": None} for prompt in prompts]
 
 
 def _blocked_by_failed_inspect(run_dir: str | None) -> dict[str, Any] | None:

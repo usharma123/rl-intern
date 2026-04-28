@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,7 @@ def create_experiment_plan(
         objective=objective,
         inputs=inputs,
         reward=RewardSpec.model_validate(reward or _default_reward(domain, inputs)),
-        runner=RunnerSpec.model_validate(_normalize_runner(runner, domain)),
+        runner=RunnerSpec.model_validate(_normalize_runner(runner, domain, inputs)),
         stages=[StageSpec(name=stage) for stage in (stages or _default_stages())],
         expected_artifacts=expected_artifacts or _default_artifacts(domain, inputs),
         research_required=research_required,
@@ -64,6 +65,28 @@ def validate_experiment_plan(plan: dict[str, Any], run_dir: str | None = None) -
         }
     except Exception as exc:
         return {"valid": False, "error": str(exc)}
+
+
+def update_experiment_plan(
+    run_dir: str,
+    updates: dict[str, Any],
+    plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    saved = _load_saved_plan(run_dir, plan.get("plan_path") if isinstance(plan, dict) else None) or {}
+    base = _merge_saved_plan(saved, plan or {}) if plan else saved
+    merged = _deep_merge(base, updates)
+    normalized = _normalize_plan(merged)
+    validated = ExperimentPlan.model_validate(normalized)
+    result = validated.model_dump()
+    path = Path(run_dir) / "experiment_plan.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+    manifest = load_manifest(run_dir)
+    manifest.domain = validated.domain
+    manifest.plan_id = validated.plan_id
+    write_manifest(run_dir, manifest)
+    result["plan_path"] = str(path)
+    return result
 
 
 def run_experiment_stage(
@@ -100,15 +123,38 @@ def _default_stages() -> list[str]:
 
 
 def _resolve_plan(plan: dict[str, Any], run_dir: str | None = None) -> dict[str, Any]:
-    candidate = _normalize_plan(plan)
+    candidate = dict(plan) if isinstance(plan, dict) else plan
     if _has_required_plan_fields(candidate):
-        return candidate
-    saved = _load_saved_plan(run_dir, candidate.get("plan_path"))
+        return _normalize_plan(candidate)
+    saved = _load_saved_plan(run_dir, candidate.get("plan_path") if isinstance(candidate, dict) else None)
     if saved:
-        merged = {**saved, **candidate}
-        merged["inputs"] = {**saved.get("inputs", {}), **candidate.get("inputs", {})}
+        merged = _merge_saved_plan(saved, candidate)
         return _normalize_plan(merged)
-    return candidate
+    return _normalize_plan(candidate)
+
+
+def _merge_saved_plan(saved: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    merged = {**saved, **candidate}
+    merged["inputs"] = {**saved.get("inputs", {}), **candidate.get("inputs", {})}
+    if "runner" not in candidate and "runner" in saved:
+        merged["runner"] = saved["runner"]
+    elif isinstance(saved.get("runner"), dict) and isinstance(candidate.get("runner"), dict):
+        merged["runner"] = {**saved["runner"], **candidate["runner"]}
+    if "reward" not in candidate and "reward" in saved:
+        merged["reward"] = saved["reward"]
+    elif isinstance(saved.get("reward"), dict) and isinstance(candidate.get("reward"), dict):
+        merged["reward"] = {**saved["reward"], **candidate["reward"]}
+    return merged
+
+
+def _deep_merge(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _load_saved_plan(run_dir: str | None, plan_path: str | None = None) -> dict[str, Any] | None:
@@ -138,20 +184,41 @@ def _normalize_plan(plan: dict[str, Any]) -> dict[str, Any]:
         normalized["stages"] = [{"name": stage} for stage in normalized["stages"]]
     if "reward" not in normalized and domain:
         normalized["reward"] = _default_reward(domain, normalized.get("inputs", {}))
-    normalized["runner"] = _normalize_runner(normalized.get("runner"), domain)
+    normalized["runner"] = _normalize_runner(normalized.get("runner"), domain, normalized.get("inputs", {}))
     if "expected_artifacts" not in normalized and domain:
         normalized["expected_artifacts"] = _default_artifacts(domain, normalized.get("inputs", {}))
     return normalized
 
 
-def _normalize_runner(runner: Any, domain: str) -> dict[str, Any]:
+def _normalize_runner(runner: Any, domain: str, inputs: dict[str, Any] | None = None) -> dict[str, Any]:
     normalized = dict(runner or {}) if isinstance(runner, dict) else {}
-    hardware = str(normalized.get("hardware", "")).lower()
+    if normalized.get("type") == "modal" and "backend" not in normalized:
+        normalized["backend"] = "modal"
+    inputs = inputs or {}
+    if inputs.get("use_modal") is True and "backend" not in normalized:
+        normalized["backend"] = "modal"
+    modal_gpu = inputs.get("modal_gpu")
+    if modal_gpu and "hardware" not in normalized:
+        normalized["hardware"] = str(modal_gpu)
+    hardware = _normalize_hardware(normalized.get("hardware", ""))
+    if hardware:
+        normalized["hardware"] = hardware
     if "backend" not in normalized and (hardware.startswith("gpu") or "modal" in hardware):
         normalized["backend"] = "modal"
     if domain == "llm_trl" and hardware.startswith("gpu") and "backend" not in normalized:
         normalized["backend"] = "modal"
     return normalized
+
+
+def _normalize_hardware(hardware: Any) -> str:
+    text = str(hardware or "").strip().lower().replace("_", "-")
+    if text in {"", "none"}:
+        return ""
+    if text in {"t4", "gpu:t4", "gpu-t4"}:
+        return "gpu-t4"
+    if text == "cpu":
+        return "cpu"
+    return text
 
 
 def _normalize_inputs(domain: str, inputs: dict[str, Any]) -> dict[str, Any]:
@@ -206,6 +273,23 @@ async def validate_experiment_plan_handler(args: dict[str, Any], session: Any = 
     return json_ready(result), bool(result.get("valid"))
 
 
+async def update_experiment_plan_handler(args: dict[str, Any], session: Any = None, **_: Any) -> tuple[str, bool]:
+    run_dir = args.get("run_dir") or getattr(session, "run_dir", None)
+    if not run_dir:
+        return json_ready({"error": "run_dir is required"}), False
+    try:
+        result = update_experiment_plan(
+            run_dir=run_dir,
+            updates=args.get("updates", {}),
+            plan=args.get("plan"),
+        )
+    except Exception as exc:
+        return json_ready({"error": str(exc)}), False
+    if session:
+        await session.send_event(Event(event_type="plan_update", data={"plan": result}))
+    return json_ready(result), True
+
+
 async def run_experiment_stage_handler(args: dict[str, Any], session: Any = None, **_: Any) -> tuple[str, bool]:
     args = {
         **args,
@@ -218,28 +302,79 @@ async def run_experiment_stage_handler(args: dict[str, Any], session: Any = None
                 data={"stage": args.get("stage"), "status": "running", "plan": args.get("plan")},
             )
         )
-    result = await asyncio.to_thread(run_experiment_stage, **args)
+    if _stage_needs_main_thread(args):
+        result = run_experiment_stage(**args)
+    else:
+        result = await asyncio.to_thread(run_experiment_stage, **args)
     if session:
         await session.send_event(
             Event(
                 event_type="plan_update",
                 data={
                     "stage": args.get("stage"),
-                    "status": "failed" if "error" in result.get("result", result) else "completed",
+                    "status": "failed" if _stage_result_failed(result.get("result", result)) else "completed",
                     "result": result,
                 },
             )
         )
-    return json_ready(result), "error" not in result.get("result", result)
+    return json_ready(result), not _stage_result_failed(result.get("result", result))
+
+
+def _stage_needs_main_thread(args: dict[str, Any]) -> bool:
+    plan = args.get("plan")
+    return (
+        sys.platform == "darwin"
+        and isinstance(plan, dict)
+        and plan.get("domain") == "gym_sb3"
+    )
 
 
 async def get_artifact_manifest_handler(args: dict[str, Any], session: Any = None, **_: Any) -> tuple[str, bool]:
     result = get_artifact_manifest(args["run_dir"])
     if session:
         await session.send_event(Event(event_type="artifact_manifest", data={"manifest": result}))
-    return json_ready(result), True
+    return json_ready(_summarize_manifest(result)), True
 
 
 async def list_domain_adapters_handler(args: dict[str, Any], **_: Any) -> tuple[str, bool]:
     result = list_domain_adapters()
     return json_ready(result), True
+
+
+def _stage_result_failed(result: dict[str, Any]) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if result.get("error"):
+        return True
+    return result.get("status") in {"failed", "error"}
+
+
+def _summarize_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    buckets = [
+        "adapters",
+        "checkpoints",
+        "configs",
+        "metrics",
+        "logs",
+        "reports",
+        "samples",
+        "videos",
+        "errors",
+    ]
+    summary: dict[str, Any] = {
+        "run_id": manifest.get("run_id"),
+        "domain": manifest.get("domain"),
+        "plan_id": manifest.get("plan_id"),
+        "updated_at": manifest.get("updated_at"),
+        "counts": {},
+        "latest": {},
+    }
+    for bucket in buckets:
+        items = manifest.get(bucket) or []
+        summary["counts"][bucket] = len(items)
+        summary["latest"][bucket] = [
+            {"name": item.get("name"), "path": item.get("path")}
+            for item in items[-3:]
+            if isinstance(item, dict)
+        ]
+    return summary

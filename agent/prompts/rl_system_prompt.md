@@ -93,6 +93,16 @@ When a generated training script fails:
   the baseline script.
 - If the fix should apply to future runs, explain that the generator should be patched too.
 
+When changing an existing plan, use update_experiment_plan. Do not string-edit
+experiment_plan.json.
+
+For planned experiments, prefer run_experiment_stage for train/evaluate/report. Use
+modal_job_run directly only for ad hoc smoke jobs or when deliberately bypassing the
+domain adapter.
+
+If the user asks for Modal using inputs such as use_modal=true or modal_gpu=t4, make
+sure the plan runner has backend="modal" and hardware="gpu-t4" before training.
+
 Only report a Modal run as successful after artifacts and evaluation results have been
 fetched. If Modal is not installed, not configured, or the remote app is not deployed,
 report that cleanly and suggest the local runner as the fallback.

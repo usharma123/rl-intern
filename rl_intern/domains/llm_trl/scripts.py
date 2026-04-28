@@ -35,6 +35,7 @@ def build_trl_training_script(method: str) -> str:
         import json
         from pathlib import Path
 
+        import torch
         from datasets import load_dataset
         from peft import LoraConfig
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -73,11 +74,13 @@ def build_trl_training_script(method: str) -> str:
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
             print("[rl-intern] loading model", flush=True)
+            torch_dtype = torch.float16 if args.fp16 else "auto"
             model = AutoModelForCausalLM.from_pretrained(
                 args.model,
                 trust_remote_code=True,
                 device_map="auto",
                 low_cpu_mem_usage=True,
+                dtype=torch_dtype,
             )
             print("[rl-intern] model loaded", flush=True)
             peft_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
@@ -107,6 +110,29 @@ def build_trl_training_script(method: str) -> str:
             print("[rl-intern] saving adapter", flush=True)
             trainer.save_model(str(output_dir / "adapter"))
             (output_dir / "metrics.json").write_text(json.dumps({{"status": "completed", "method": "{method}"}}))
+            print("[rl-intern] generating eval samples", flush=True)
+            prompts = [
+                "### Human: Explain reinforcement learning in one paragraph.\\n### Assistant:",
+                "### Human: Give two practical tips for training small language models.\\n### Assistant:",
+                "### Human: What is overfitting?\\n### Assistant:",
+            ]
+            model.eval()
+            samples = []
+            for prompt in prompts:
+                inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+                with torch.no_grad():
+                    outputs = model.generate(
+                        **inputs,
+                        max_new_tokens=80,
+                        do_sample=False,
+                        pad_token_id=tokenizer.eos_token_id,
+                    )
+                decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                completion = decoded[len(prompt):].strip() if decoded.startswith(prompt) else decoded.strip()
+                samples.append({{"prompt": prompt, "completion": completion, "score": None}})
+            (output_dir / "sample_generations.json").write_text(
+                json.dumps({{"status": "completed", "samples": samples}}, indent=2)
+            )
             print("[rl-intern] training completed", flush=True)
 
         if __name__ == "__main__":

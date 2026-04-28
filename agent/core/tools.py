@@ -36,6 +36,7 @@ from agent.tools.orchestrator import (
     get_artifact_manifest_handler,
     list_domain_adapters_handler,
     run_experiment_stage_handler,
+    update_experiment_plan_handler,
     validate_experiment_plan_handler,
 )
 from agent.tools.random_baseline import run_random_baseline
@@ -174,8 +175,21 @@ def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
         ToolSpec(
             name="validate_experiment_plan",
             description="Validate an ExperimentPlan and return adapter artifact expectations.",
-            parameters=_schema({"plan": {"type": "object"}}, ["plan"]),
+            parameters=_schema({"plan": {"type": "object"}, "run_dir": {"type": ["string", "null"]}}, ["plan"]),
             handler=validate_experiment_plan_handler,
+        ),
+        ToolSpec(
+            name="update_experiment_plan",
+            description="Structurally update and persist an existing ExperimentPlan without string-editing JSON.",
+            parameters=_schema(
+                {
+                    "run_dir": {"type": ["string", "null"]},
+                    "plan": {"type": ["object", "null"]},
+                    "updates": {"type": "object"},
+                },
+                ["updates"],
+            ),
+            handler=update_experiment_plan_handler,
         ),
         ToolSpec(
             name="run_experiment_stage",
@@ -462,7 +476,10 @@ def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
         ToolSpec(
             name="modal_job_cancel",
             description="Cancel a detached Modal job.",
-            parameters=_schema({"backend_id": {"type": "string"}}, ["backend_id"]),
+            parameters=_schema(
+                {"backend_id": {"type": "string"}, "run_dir": {"type": ["string", "null"]}},
+                ["backend_id"],
+            ),
             handler=modal_job_cancel_handler,
         ),
         ToolSpec(
