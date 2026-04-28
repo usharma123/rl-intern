@@ -1,4 +1,4 @@
-import { Box, Text, createCliRenderer } from "@opentui/core"
+import { Box, Text, createCliRenderer, decodePasteBytes, stripAnsiSequences } from "@opentui/core"
 import { Backend } from "./backend"
 import { applyEvent, createInitialState } from "./state"
 
@@ -15,6 +15,13 @@ const model = modelIndex >= 0 ? args[modelIndex + 1] : undefined
 backend.start(model)
 
 let prompt = ""
+
+function appendPromptText(text: string) {
+  const cleaned = stripAnsiSequences(text).replace(/[\r\n]+/g, " ")
+  if (!cleaned) return
+  prompt += cleaned
+  render()
+}
 
 function render() {
   try {
@@ -37,12 +44,12 @@ function render() {
       Box(
         { flexDirection: "row", gap: 2 },
         Box(
-          { flexDirection: "column", borderStyle: "single", padding: 1, width: "55%", height: 18 },
+          { flexDirection: "column", borderStyle: "single", padding: 1, width: "54%", height: 18 },
           Text({ content: "Transcript", fg: "#a7f3d0" }),
           Text({ content: state.transcript.slice(-20).join("") || "Waiting for input..." }),
         ),
         Box(
-          { flexDirection: "column", borderStyle: "single", padding: 1, width: "45%", height: 18 },
+          { flexDirection: "column", borderStyle: "single", padding: 1, width: "42%", height: 18 },
           Text({ content: "Tools / Artifacts", fg: "#fde68a" }),
           Text({ content: state.toolEvents.slice(-10).join("\n") || "No tools yet." }),
           Text({ content: "\nArtifacts:\n" + (state.artifacts.slice(-6).join("\n") || "None") }),
@@ -62,6 +69,10 @@ function render() {
   )
   renderer.root.requestRender()
 }
+
+renderer.keyInput.on("paste", (event) => {
+  appendPromptText(decodePasteBytes(event.bytes))
+})
 
 renderer.keyInput.on("keypress", (event) => {
   if (event.ctrl && event.name === "c") {
@@ -94,9 +105,8 @@ renderer.keyInput.on("keypress", (event) => {
     state.toolEvents.push(`Viewer: http://127.0.0.1:8765/runs/${state.runId}/viewer`)
     render()
   }
-  if (!event.ctrl && !event.meta && event.sequence && event.sequence.length === 1) {
-    prompt += event.sequence
-    render()
+  if (!event.ctrl && !event.meta && event.sequence) {
+    appendPromptText(event.sequence)
   }
 })
 
