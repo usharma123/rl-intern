@@ -1,0 +1,40 @@
+{
+  "name": "rl-intern-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "bun@1.3.10",
+  "scripts": {
+    "dev": "bun --bun vite --host 127.0.0.1",
+    "dev:full": "bun ./scripts/dev-full.ts",
+    "build": "bun --bun tsc -b && bun --bun vite build",
+    "lint": "bun --bun eslint .",
+    "preview": "bun --bun vite preview"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^9.0.0",
+    "@mui/material": "^9.0.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^16.1.0",
+    "remark-gfm": "^4.0.1",
+    "zustand": "^5.0.9"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "@vitejs/plugin-react": "^6.0.1",
+    "eslint": "^10.2.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.5.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.48.1",
+    "vite": "^8.0.10"
+  }
+}

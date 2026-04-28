@@ -46,20 +46,29 @@ Modal is not used for arbitrary custom code in this version. Generated
 environments, reward functions, and paper reproduction scripts should still run
 locally until sandbox support is added.
 
-## Interactive TUI
+## Web Frontend
 
-`rl-intern-tui` launches an OpenTUI terminal frontend. The TUI is optional and
-requires Bun because OpenTUI is currently Bun-first.
+A web frontend lives in `frontend/` (Vite + React + MUI, mirroring
+[`huggingface/ml-intern`](https://github.com/huggingface/ml-intern)). It talks
+to the run server over a single WebSocket that bridges to the existing
+`rl_intern.rpc` JSON-line protocol — Python remains the only place RL tools,
+approvals, training, and artifacts run.
 
 ```bash
-cd tui
+# 1. start the run server (FastAPI on 127.0.0.1:8765)
+uv sync --extra server
+rl-intern-server --host 127.0.0.1 --port 8765
+
+# 2. start the dev frontend in another shell
+cd frontend
 bun install
-cd ..
-rl-intern-tui --model openrouter/anthropic/claude-sonnet-4.5
+bun run dev
 ```
 
-The TUI starts the Python backend over newline-delimited JSON and keeps Python
-as the only place where RL tools, approvals, training, and artifacts run.
+Then open http://localhost:5173.
+
+For a single command that starts the run server when it is not already running,
+use `bun run dev:full` from `frontend/`.
 
 ## Run Server and Viewer
 

@@ -27,11 +27,13 @@ dependencies = [
 dev = [
     "pytest",
     "fastapi",
-    "uvicorn",
+    "uvicorn[standard]",
+    "websockets",
 ]
 server = [
     "fastapi",
-    "uvicorn",
+    "uvicorn[standard]",
+    "websockets",
 ]
 modal = [
     "modal",
@@ -39,7 +41,6 @@ modal = [
 
 [project.scripts]
 rl-intern = "rl_intern.cli:cli"
-rl-intern-tui = "rl_intern.tui:main"
 rl-intern-server = "rl_intern.server.cli:main"
 
 [build-system]
