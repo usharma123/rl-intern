@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 from rl_intern.events import normalize_event
 from rl_intern.run_store import RunStore
@@ -31,3 +32,21 @@ def test_run_store_handles_malformed_jsonl(tmp_path):
     events = store.read_events("run_bad")
 
     assert events[0]["type"] == "malformed_jsonl"
+
+
+def test_run_store_create_run_is_safe_for_same_run_id_race(tmp_path):
+    store = RunStore(tmp_path / "runs")
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        records = list(
+            executor.map(
+                lambda _: store.create_run(run_id="run_race", model="test-model"),
+                range(32),
+            )
+        )
+
+    assert {record.run_id for record in records} == {"run_race"}
+    metadata = store.load_metadata("run_race")
+    assert metadata["run_id"] == "run_race"
+    assert metadata["model"] == "test-model"
+    assert not list((tmp_path / "runs" / "run_race").glob("*.tmp"))
