@@ -19,12 +19,43 @@ function tone(status?: string): StatusTone {
   return 'ok';
 }
 
-function artifactCount(manifest?: Record<string, unknown>): number {
+const ARTIFACT_BUCKETS = [
+  'checkpoints',
+  'adapters',
+  'configs',
+  'metrics',
+  'logs',
+  'videos',
+  'reports',
+  'samples',
+  'errors',
+] as const;
+
+export function artifactCount(manifest?: Record<string, unknown>): number {
   if (!manifest) return 0;
-  return Object.values(manifest).reduce<number>((acc, value) => {
-    if (Array.isArray(value)) return acc + value.length;
-    return acc;
+  const bucketed = ARTIFACT_BUCKETS.reduce<number>((acc, bucket) => {
+    const value = manifest[bucket];
+    return Array.isArray(value) ? acc + value.length : acc;
   }, 0);
+  if (bucketed > 0) return bucketed;
+  return Array.isArray(manifest.artifacts) ? manifest.artifacts.length : 0;
+}
+
+function artifactBuckets(manifest?: Record<string, unknown>) {
+  if (!manifest) return [];
+  return ARTIFACT_BUCKETS.map((bucket) => {
+    const items = manifest[bucket];
+    if (!Array.isArray(items) || items.length === 0) return null;
+    const names = items
+      .slice(-2)
+      .map((item) => {
+        if (item && typeof item === 'object' && 'name' in item) return String((item as { name?: unknown }).name);
+        if (item && typeof item === 'object' && 'path' in item) return String((item as { path?: unknown }).path).split('/').pop();
+        return String(item);
+      })
+      .filter(Boolean);
+    return { bucket, count: items.length, names };
+  }).filter(Boolean) as Array<{ bucket: string; count: number; names: string[] }>;
 }
 
 export default function RunDashboard({ plan, jobs, artifacts }: Props) {
@@ -129,7 +160,7 @@ export default function RunDashboard({ plan, jobs, artifacts }: Props) {
         )}
       </Box>
 
-      <Box>
+      <Box sx={{ minWidth: 0 }}>
         <Typography
           sx={{
             fontFamily: 'var(--font-mono)',
@@ -144,6 +175,22 @@ export default function RunDashboard({ plan, jobs, artifacts }: Props) {
         <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: '1.4rem', color: 'var(--accent)', lineHeight: 1 }}>
           {count}
         </Typography>
+        {artifactBuckets(artifacts.manifest).slice(0, 4).map((bucket) => (
+          <Typography
+            key={bucket.bucket}
+            sx={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.68rem',
+              color: bucket.bucket === 'errors' ? 'var(--error)' : 'var(--text-muted)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {bucket.bucket}: {bucket.count}
+            {bucket.names.length ? ` - ${bucket.names.join(', ')}` : ''}
+          </Typography>
+        ))}
       </Box>
     </Box>
   );

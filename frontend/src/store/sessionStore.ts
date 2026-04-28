@@ -38,14 +38,15 @@ export const useSessionStore = create<SessionStore>()(
 
       hydrateSessions: (incoming) => {
         set((s) => {
-          const byId = new Map<string, SessionMeta>();
-          for (const session of incoming) byId.set(session.id, session);
-          for (const session of s.sessions) {
-            byId.set(session.id, { ...byId.get(session.id), ...session });
-          }
-          const sessions = [...byId.values()].sort(
-            (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-          );
+          const persistedById = new Map(s.sessions.map((session) => [session.id, session]));
+          const sessions = incoming
+            .map((session) => {
+              const persisted = persistedById.get(session.id);
+              return persisted ? { ...session, ...persisted } : session;
+            })
+            .sort(
+              (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+            );
           const activeSessionId =
             s.activeSessionId && sessions.some((x) => x.id === s.activeSessionId)
               ? s.activeSessionId
