@@ -13,6 +13,7 @@ interface SessionStore {
   activeSessionId: string | null;
 
   createSession: (id: string) => void;
+  hydrateSessions: (sessions: SessionMeta[]) => void;
   deleteSession: (id: string) => void;
   switchSession: (id: string) => void;
   updateSessionTitle: (id: string, title: string) => void;
@@ -33,6 +34,24 @@ export const useSessionStore = create<SessionStore>()(
           needsAttention: false,
         };
         set((s) => ({ sessions: [...s.sessions, meta], activeSessionId: id }));
+      },
+
+      hydrateSessions: (incoming) => {
+        set((s) => {
+          const byId = new Map<string, SessionMeta>();
+          for (const session of incoming) byId.set(session.id, session);
+          for (const session of s.sessions) {
+            byId.set(session.id, { ...byId.get(session.id), ...session });
+          }
+          const sessions = [...byId.values()].sort(
+            (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+          );
+          const activeSessionId =
+            s.activeSessionId && sessions.some((x) => x.id === s.activeSessionId)
+              ? s.activeSessionId
+              : sessions[sessions.length - 1]?.id ?? null;
+          return { sessions, activeSessionId };
+        });
       },
 
       deleteSession: (id) => {

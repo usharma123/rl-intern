@@ -12,6 +12,7 @@ export default function Sidebar() {
   const model = useLayoutStore((s) => s.model);
   const setModel = useLayoutStore((s) => s.setModel);
   const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [draftModel, setDraftModel] = useState(model);
 
   const handleNewSession = async () => {
@@ -24,6 +25,17 @@ export default function Sidebar() {
       createSession(data.session_id);
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleDeleteSession = async (id: string) => {
+    if (deleting) return;
+    setDeleting(id);
+    try {
+      const res = await apiFetch(`/runs/${id}`, { method: 'DELETE' });
+      if (res.ok || res.status === 404) deleteSession(id);
+    } finally {
+      setDeleting(null);
     }
   };
 
@@ -209,8 +221,9 @@ export default function Sidebar() {
                     size="small"
                     onClick={(e) => {
                       e.stopPropagation();
-                      deleteSession(s.id);
+                      handleDeleteSession(s.id);
                     }}
+                    disabled={deleting === s.id}
                     sx={{
                       opacity: 0,
                       width: 22,

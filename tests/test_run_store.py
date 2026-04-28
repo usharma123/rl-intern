@@ -50,3 +50,28 @@ def test_run_store_create_run_is_safe_for_same_run_id_race(tmp_path):
     assert metadata["run_id"] == "run_race"
     assert metadata["model"] == "test-model"
     assert not list((tmp_path / "runs" / "run_race").glob("*.tmp"))
+
+
+def test_create_run_preserves_existing_metadata_and_session_log(tmp_path):
+    store = RunStore(tmp_path / "runs")
+    first = store.create_run(run_id="run_persist", model="model-a", prompt="first")
+    store.append_event("run_persist", {"type": "user_input", "content": "hello"})
+
+    second = store.create_run(run_id="run_persist", model="model-b", prompt=None)
+
+    metadata = store.load_metadata("run_persist")
+    assert second.session_path == first.session_path
+    assert metadata["created_at"]
+    assert metadata["model"] == "model-b"
+    assert metadata["prompt"] == "first"
+    assert len(store.read_events("run_persist")) == 1
+
+
+def test_delete_run_removes_local_directory(tmp_path):
+    store = RunStore(tmp_path / "runs")
+    record = store.create_run(run_id="run_delete")
+    (record.run_dir / "artifact.txt").write_text("x", encoding="utf-8")
+
+    assert store.delete_run("run_delete") is True
+    assert not record.run_dir.exists()
+    assert store.delete_run("run_delete") is False

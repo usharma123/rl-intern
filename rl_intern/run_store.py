@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,13 +45,15 @@ class RunStore:
             session_path=run_dir / "session.jsonl",
             metadata_path=run_dir / "metadata.json",
         )
+        existing = self.load_metadata(run_id)
         metadata = {
+            **existing,
             "run_id": run_id,
-            "created_at": utc_now_iso(),
+            "created_at": existing.get("created_at", utc_now_iso()),
             "updated_at": utc_now_iso(),
-            "model": model,
-            "prompt": prompt,
-            "runner": runner,
+            "model": model or existing.get("model"),
+            "prompt": prompt if prompt is not None else existing.get("prompt"),
+            "runner": runner or existing.get("runner", "local"),
             "run_dir": str(run_dir),
             "session_path": str(record.session_path),
         }
@@ -144,6 +147,17 @@ class RunStore:
                     }
                 )
         return artifacts
+
+    def delete_run(self, run_id: str) -> bool:
+        record = self.get_run(run_id)
+        root = self.root.resolve()
+        run_dir = record.run_dir.resolve()
+        if not run_dir.exists():
+            return False
+        if root not in run_dir.parents:
+            raise ValueError(f"Refusing to delete run outside root: {run_dir}")
+        shutil.rmtree(run_dir)
+        return True
 
     @staticmethod
     def _atomic_json(path: Path, payload: dict[str, Any]) -> None:

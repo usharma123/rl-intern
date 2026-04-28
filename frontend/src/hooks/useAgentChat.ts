@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChatMessage, RpcEvent, ToolBlock, ToolStatus } from '@/types/events';
+import type {
+  ArtifactDashboardState,
+  ChatMessage,
+  JobDashboardState,
+  PlanDashboardState,
+  RpcEvent,
+  ToolBlock,
+  ToolStatus,
+} from '@/types/events';
 import { useLayoutStore } from '@/store/layoutStore';
-import { apiWsUrl } from '@/utils/api';
+import { apiFetch, apiWsUrl } from '@/utils/api';
 
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'error';
 
@@ -12,6 +20,9 @@ export interface UseAgentChat {
   bridgeOpen: boolean;
   agentReady: boolean;
   pendingApprovals: Array<Record<string, unknown>>;
+  plan: PlanDashboardState;
+  jobs: JobDashboardState[];
+  artifacts: ArtifactDashboardState;
   sendMessage: (text: string) => void;
   approve: (toolCallId: unknown, approved: boolean) => void;
   interrupt: () => void;
@@ -34,11 +45,40 @@ export function useAgentChat(sessionId: string): UseAgentChat {
   const [bridgeOpen, setBridgeOpen] = useState(false);
   const [agentReady, setAgentReady] = useState(false);
   const [pendingApprovals, setPendingApprovals] = useState<Array<Record<string, unknown>>>([]);
+  const [plan, setPlan] = useState<PlanDashboardState>({});
+  const [jobs, setJobs] = useState<JobDashboardState[]>([]);
+  const [artifacts, setArtifacts] = useState<ArtifactDashboardState>({});
   const wsRef = useRef<WebSocket | null>(null);
   const model = useLayoutStore.getState().model;
 
   // Open one WS per session id. Stays open for the session's lifetime.
   useEffect(() => {
+    let cancelled = false;
+    async function loadHistory() {
+      setMessages([]);
+      setPendingApprovals([]);
+      setPlan({});
+      setJobs([]);
+      setArtifacts({});
+      try {
+        const res = await apiFetch(`/runs/${sessionId}/events.jsonl`);
+        if (!res.ok) return;
+        const text = await res.text();
+        if (cancelled) return;
+        const events = text
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as RpcEvent);
+        for (const event of events) {
+          reduce(event, setMessages, setPendingApprovals, setPlan, setJobs, setArtifacts);
+        }
+      } catch {
+        /* History is best-effort; a brand-new run won't have events yet. */
+      }
+    }
+    loadHistory();
+
     const url = apiWsUrl('/api/ws/chat');
     url.searchParams.set('session_id', sessionId);
     if (model) url.searchParams.set('model', model);
@@ -105,10 +145,11 @@ export function useAgentChat(sessionId: string): UseAgentChat {
 
       if (parsed.status) setStatus(parsed.status);
       else if (parsed.type) setStatus(parsed.type);
-      reduce(parsed, setMessages, setPendingApprovals);
+      reduce(parsed, setMessages, setPendingApprovals, setPlan, setJobs, setArtifacts);
     });
 
     return () => {
+      cancelled = true;
       try {
         ws.send(JSON.stringify({ type: 'shutdown', id: 'shutdown' }));
       } catch {
@@ -158,6 +199,9 @@ export function useAgentChat(sessionId: string): UseAgentChat {
     bridgeOpen,
     agentReady,
     pendingApprovals,
+    plan,
+    jobs,
+    artifacts,
     sendMessage,
     approve,
     interrupt,
@@ -170,8 +214,17 @@ function reduce(
   event: RpcEvent,
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
   setApprovals: React.Dispatch<React.SetStateAction<Array<Record<string, unknown>>>>,
+  setPlan: React.Dispatch<React.SetStateAction<PlanDashboardState>>,
+  setJobs: React.Dispatch<React.SetStateAction<JobDashboardState[]>>,
+  setArtifacts: React.Dispatch<React.SetStateAction<ArtifactDashboardState>>,
 ) {
   switch (event.type) {
+    case 'user_input': {
+      const text = String(event.content ?? event.data?.text ?? '');
+      if (!text) return;
+      setMessages((prev) => appendUserText(prev, text, event.timestamp));
+      return;
+    }
     case 'assistant_chunk':
     case 'assistant_message': {
       const content = String(event.data?.content ?? '');
@@ -218,6 +271,41 @@ function reduce(
       setApprovals(Array.isArray(tools) ? (tools as Array<Record<string, unknown>>) : []);
       return;
     }
+    case 'plan_update': {
+      const data = event.data ?? {};
+      setPlan((prev) => ({
+        ...prev,
+        plan: (event.plan ?? data.plan ?? prev.plan) as Record<string, unknown> | undefined,
+        stage: (event.stage ?? data.stage ?? prev.stage) as string | undefined,
+        status: String(event.status ?? data.status ?? prev.status ?? 'updated'),
+        result: data.result ?? prev.result,
+      }));
+      return;
+    }
+    case 'job_update': {
+      const data = event.data ?? {};
+      const job: JobDashboardState = {
+        jobId: String(event.job_id ?? data.job_id ?? data.jobId ?? ''),
+        backendId: String(event.backend_id ?? data.backend_id ?? ''),
+        stage: typeof data.stage === 'string' ? data.stage : undefined,
+        status: String(event.status ?? data.status ?? 'updated'),
+        hardware: typeof data.hardware === 'string' ? data.hardware : undefined,
+        error: typeof data.error === 'string' ? data.error : undefined,
+      };
+      setJobs((prev) => {
+        const key = job.jobId || job.backendId;
+        if (!key) return [job, ...prev].slice(0, 8);
+        const idx = prev.findIndex((j) => (j.jobId || j.backendId) === key);
+        if (idx === -1) return [job, ...prev].slice(0, 8);
+        return prev.map((j, i) => (i === idx ? { ...j, ...job } : j));
+      });
+      return;
+    }
+    case 'artifact_manifest': {
+      const manifest = (event.manifest ?? event.data?.manifest) as Record<string, unknown>;
+      setArtifacts({ manifest });
+      return;
+    }
     case 'error': {
       const message = String(event.data?.error ?? event.error ?? 'Unknown backend error');
       setMessages((prev) => [
@@ -227,6 +315,20 @@ function reduce(
       return;
     }
   }
+}
+
+function appendUserText(messages: ChatMessage[], text: string, timestamp?: string): ChatMessage[] {
+  const last = messages[messages.length - 1];
+  if (last?.kind === 'user' && last.text === text) return messages;
+  return [
+    ...messages,
+    {
+      kind: 'user',
+      id: nextId(),
+      text,
+      ts: timestamp ? new Date(timestamp).getTime() : Date.now(),
+    },
+  ];
 }
 
 function appendAssistantText(messages: ChatMessage[], chunk: string): ChatMessage[] {

@@ -23,3 +23,7 @@ def test_run_server_endpoints(tmp_path):
     assert client.get("/runs/run_server/artifacts").status_code == 200
     assert client.get("/runs/run_server/report.md").text == "# Report\n"
     assert "Euphony" in client.get("/runs/run_server/viewer").text
+    deleted = client.delete("/runs/run_server")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert client.get("/runs/run_server").status_code == 404

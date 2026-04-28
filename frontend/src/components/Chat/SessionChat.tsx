@@ -7,6 +7,7 @@ import { useAgentChat } from '@/hooks/useAgentChat';
 import { useSessionStore } from '@/store/sessionStore';
 import MessageList from './MessageList';
 import ChatInput from './ChatInput';
+import RunDashboard from './RunDashboard';
 import StatusChip, { type StatusTone } from '@/components/Common/StatusChip';
 
 const SUGGESTIONS = [
@@ -59,6 +60,9 @@ export default function SessionChat({ sessionId, isActive }: Props) {
     bridgeOpen,
     agentReady,
     pendingApprovals,
+    plan,
+    jobs,
+    artifacts,
     sendMessage,
     approve,
     interrupt,
@@ -241,6 +245,8 @@ export default function SessionChat({ sessionId, isActive }: Props) {
       </Box>
 
       {showConnectingRail && <ConnectingRail tone={chip.tone} label={chip.label} />}
+
+      <RunDashboard plan={plan} jobs={jobs} artifacts={artifacts} />
 
       <MessageList messages={messages} />
 

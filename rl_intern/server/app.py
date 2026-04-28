@@ -62,6 +62,7 @@ def create_app(run_store: RunStore | None = None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -171,6 +172,10 @@ def create_app(run_store: RunStore | None = None) -> FastAPI:
                     await proc.stdin.drain()
             except WebSocketDisconnect:
                 return
+            except RuntimeError as exc:
+                if "WebSocket is not connected" in str(exc):
+                    return
+                logger.exception("client→rpc pump runtime error: %s", exc)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -247,6 +252,16 @@ def create_app(run_store: RunStore | None = None) -> FastAPI:
             "artifacts": store.list_artifacts(run_id),
             "event_count": len(store.read_events(run_id)),
         }
+
+    @app.delete("/runs/{run_id}")
+    def delete_run(run_id: str) -> dict[str, Any]:
+        try:
+            deleted = store.delete_run(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return {"run_id": run_id, "deleted": True}
 
     @app.get("/runs/{run_id}/events.jsonl")
     def events_jsonl(run_id: str) -> PlainTextResponse:
