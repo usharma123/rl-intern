@@ -277,6 +277,8 @@ def _is_cancelled_error(exc: Exception) -> bool:
 
 
 def _bucket_for(path: Path) -> str:
+    if "adapter" in path.parts or path.name in {"adapter_model.safetensors", "adapter_config.json"}:
+        return "adapters"
     suffix = path.suffix.lower()
     if suffix in {".log", ".txt"}:
         return "logs"

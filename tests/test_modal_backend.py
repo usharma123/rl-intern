@@ -7,6 +7,7 @@ from rl_intern.runners import modal_backend
 from agent.tools import modal_primitives
 from rl_intern.modal_jobs.generic import (
     GPU_T4_FUNCTION_NAME,
+    _configure_persistent_caches,
     _python_unbuffered,
     _run_job_locally,
     function_name_for_hardware,
@@ -32,6 +33,7 @@ def test_modal_artifact_bucket_mapping():
     assert modal_backend._bucket_for(__import__("pathlib").Path("x.log")) == "logs"
     assert modal_backend._bucket_for(__import__("pathlib").Path("eval.json")) == "metrics"
     assert modal_backend._bucket_for(__import__("pathlib").Path("rollout.mp4")) == "videos"
+    assert modal_backend._bucket_for(__import__("pathlib").Path("llm_output/adapter/adapter_model.safetensors")) == "adapters"
 
 
 def test_generic_job_preserves_command_array_quotes():
@@ -60,6 +62,33 @@ def test_generic_job_uses_unbuffered_python_for_script():
     assert result["status"] == "succeeded"
     assert result["command"][:2] == ["python", "-u"]
     assert "script output" in result["stdout"]
+
+
+def test_generic_job_collects_relative_output_artifacts():
+    result = _run_job_locally(
+        {
+            "run_id": "run_test",
+            "script": (
+                "from pathlib import Path\n"
+                "Path('llm_output/adapter').mkdir(parents=True, exist_ok=True)\n"
+                "Path('llm_output/adapter/adapter_model.safetensors').write_text('adapter')\n"
+            ),
+            "timeout": "30s",
+        }
+    )
+
+    assert result["status"] == "succeeded"
+    assert "llm_output/adapter/adapter_model.safetensors" in result["artifacts"]
+
+
+def test_generic_job_configures_cache_env(tmp_path):
+    env = {}
+
+    _configure_persistent_caches(env, tmp_path)
+
+    assert env["HF_HUB_ENABLE_HF_TRANSFER"] == "1"
+    assert "huggingface" in env["HF_HOME"]
+    assert "pip" in env["PIP_CACHE_DIR"]
 
 
 def test_python_unbuffered_preserves_existing_flag():

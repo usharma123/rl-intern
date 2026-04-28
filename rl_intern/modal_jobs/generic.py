@@ -90,6 +90,7 @@ def _run_job_locally(request: dict[str, Any]) -> dict[str, Any]:
         env = os.environ.copy()
         env.update(request.get("env") or {})
         env.update(request.get("secrets") or {})
+        _configure_persistent_caches(env, root)
         deps = request.get("dependencies") or []
         main_cmd: list[str] | str
         use_shell = False
@@ -171,6 +172,18 @@ def _python_unbuffered(command: list[str]) -> list[str]:
     if "-u" in command[1:]:
         return command
     return [command[0], "-u", *command[1:]]
+
+
+def _configure_persistent_caches(env: dict[str, str], fallback_root: Path) -> None:
+    cache_root = Path("/runs/.cache") if Path("/runs").exists() else fallback_root / ".cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    env.setdefault("HF_HOME", str(cache_root / "huggingface"))
+    env.setdefault("HF_DATASETS_CACHE", str(cache_root / "huggingface" / "datasets"))
+    env.setdefault("TRANSFORMERS_CACHE", str(cache_root / "huggingface" / "transformers"))
+    env.setdefault("PIP_CACHE_DIR", str(cache_root / "pip"))
+    env.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+    for key in ("HF_HOME", "HF_DATASETS_CACHE", "TRANSFORMERS_CACHE", "PIP_CACHE_DIR"):
+        Path(env[key]).mkdir(parents=True, exist_ok=True)
 
 
 def _run_process_with_tee(
