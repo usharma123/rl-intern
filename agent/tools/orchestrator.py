@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from pathlib import Path
@@ -32,7 +33,7 @@ def create_experiment_plan(
         objective=objective,
         inputs=inputs,
         reward=RewardSpec.model_validate(reward or _default_reward(domain, inputs)),
-        runner=RunnerSpec.model_validate(runner or {}),
+        runner=RunnerSpec.model_validate(_normalize_runner(runner, domain)),
         stages=[StageSpec(name=stage) for stage in (stages or _default_stages())],
         expected_artifacts=expected_artifacts or _default_artifacts(domain, inputs),
         research_required=research_required,
@@ -137,10 +138,19 @@ def _normalize_plan(plan: dict[str, Any]) -> dict[str, Any]:
         normalized["stages"] = [{"name": stage} for stage in normalized["stages"]]
     if "reward" not in normalized and domain:
         normalized["reward"] = _default_reward(domain, normalized.get("inputs", {}))
-    if "runner" not in normalized:
-        normalized["runner"] = {}
+    normalized["runner"] = _normalize_runner(normalized.get("runner"), domain)
     if "expected_artifacts" not in normalized and domain:
         normalized["expected_artifacts"] = _default_artifacts(domain, normalized.get("inputs", {}))
+    return normalized
+
+
+def _normalize_runner(runner: Any, domain: str) -> dict[str, Any]:
+    normalized = dict(runner or {}) if isinstance(runner, dict) else {}
+    hardware = str(normalized.get("hardware", "")).lower()
+    if "backend" not in normalized and (hardware.startswith("gpu") or "modal" in hardware):
+        normalized["backend"] = "modal"
+    if domain == "llm_trl" and hardware.startswith("gpu") and "backend" not in normalized:
+        normalized["backend"] = "modal"
     return normalized
 
 
@@ -149,6 +159,8 @@ def _normalize_inputs(domain: str, inputs: dict[str, Any]) -> dict[str, Any]:
     if domain == "llm_trl":
         if "dataset" not in normalized and "dataset_name" in normalized:
             normalized["dataset"] = normalized["dataset_name"]
+        if "dataset" not in normalized and "dataset_path" in normalized:
+            normalized["dataset"] = normalized["dataset_path"]
         if "model" not in normalized and "model_name" in normalized:
             normalized["model"] = normalized["model_name"]
         if "split" not in normalized and "dataset_split" in normalized:
@@ -206,7 +218,7 @@ async def run_experiment_stage_handler(args: dict[str, Any], session: Any = None
                 data={"stage": args.get("stage"), "status": "running", "plan": args.get("plan")},
             )
         )
-    result = run_experiment_stage(**args)
+    result = await asyncio.to_thread(run_experiment_stage, **args)
     if session:
         await session.send_event(
             Event(

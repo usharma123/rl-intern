@@ -72,7 +72,10 @@ class LLMTRLAdapter(DomainAdapter):
         return result
 
     def train(self, plan: ExperimentPlan, run_dir: str | None = None) -> dict[str, Any]:
-        prepared = self.prepare(plan, run_dir=run_dir)
+        blocked = _blocked_by_failed_inspect(run_dir)
+        if blocked:
+            return blocked
+        prepared = self._prepared_script(plan, run_dir)
         if plan.runner.backend == "modal":
             from rl_intern.runners.modal_backend import run_modal_job
 
@@ -104,6 +107,9 @@ class LLMTRLAdapter(DomainAdapter):
         return {"status": "dry_run", "output_dir": str(output_dir), "message": marker.read_text()}
 
     def evaluate(self, plan: ExperimentPlan, run_dir: str | None = None) -> dict[str, Any]:
+        blocked = _blocked_by_failed_inspect(run_dir)
+        if blocked:
+            return blocked
         samples = [
             {
                 "prompt": "Evaluation placeholder",
@@ -169,6 +175,22 @@ class LLMTRLAdapter(DomainAdapter):
             "configs": ["train_trl.py", "llm_training_config.json"],
         }
 
+    def _prepared_script(self, plan: ExperimentPlan, run_dir: str | None = None) -> dict[str, Any]:
+        if run_dir:
+            script_path = Path(run_dir) / "train_trl.py"
+            if script_path.exists():
+                return {
+                    "method": _method(plan),
+                    "model": _input(plan, "model"),
+                    "dataset": _input(plan, "dataset"),
+                    "dependencies": _dependencies(),
+                    "script_path": str(script_path),
+                    "script_source": "existing",
+                }
+        result = self.prepare(plan, run_dir=run_dir)
+        result["script_source"] = "generated"
+        return result
+
 
 def _method(plan: ExperimentPlan) -> str:
     return str(plan.inputs.get("method", "sft")).lower()
@@ -177,7 +199,7 @@ def _method(plan: ExperimentPlan) -> str:
 def _input(plan: ExperimentPlan, key: str) -> Any:
     aliases = {
         "model": ("model", "model_name"),
-        "dataset": ("dataset", "dataset_name"),
+        "dataset": ("dataset", "dataset_name", "dataset_path"),
         "split": ("split", "dataset_split"),
     }
     for candidate in aliases.get(key, (key,)):
@@ -200,7 +222,7 @@ def _dependencies() -> list[str]:
 
 
 def _script_args(plan: ExperimentPlan, run_dir: str | None) -> list[str]:
-    output_dir = str(Path(run_dir or ".") / "llm_output")
+    output_dir = str(Path(run_dir or ".") / str(plan.inputs.get("output_dir", "llm_output")))
     args = [
         "--model",
         str(_input(plan, "model")),
@@ -208,9 +230,29 @@ def _script_args(plan: ExperimentPlan, run_dir: str | None) -> list[str]:
         str(_input(plan, "dataset")),
         "--output-dir",
         output_dir,
+        "--split",
+        str(_input(plan, "split") or "train"),
         "--max-steps",
         str(plan.inputs.get("max_steps", 20)),
+        "--max-samples",
+        str(plan.inputs.get("max_samples", 100)),
+        "--per-device-train-batch-size",
+        str(plan.inputs.get("per_device_train_batch_size", 1)),
+        "--gradient-accumulation-steps",
+        str(plan.inputs.get("gradient_accumulation_steps", 1)),
+        "--learning-rate",
+        str(plan.inputs.get("learning_rate", 5e-5)),
+        "--logging-steps",
+        str(plan.inputs.get("logging_steps", 1)),
+        "--warmup-steps",
+        str(plan.inputs.get("warmup_steps", 0)),
     ]
+    if plan.inputs.get("save_steps") is not None:
+        args.extend(["--save-steps", str(plan.inputs["save_steps"])])
+    if bool(plan.inputs.get("fp16")):
+        args.append("--fp16")
+    if bool(plan.inputs.get("bf16")):
+        args.append("--bf16")
     if _method(plan) == "grpo" and plan.reward.verifier_path:
         args.extend(["--verifier-path", plan.reward.verifier_path])
     return args
@@ -237,3 +279,14 @@ def _read_json(run_dir: str | None, filename: str) -> dict[str, Any]:
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _blocked_by_failed_inspect(run_dir: str | None) -> dict[str, Any] | None:
+    inspect_result = _read_json(run_dir, "llm_dataset_inspect.json")
+    if inspect_result and inspect_result.get("valid") is False:
+        return {
+            "status": "failed",
+            "error": "Cannot continue after failed LLM dataset inspection.",
+            "inspect": inspect_result,
+        }
+    return None

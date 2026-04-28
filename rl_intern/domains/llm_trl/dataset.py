@@ -28,7 +28,8 @@ def inspect_llm_dataset(
             }
     sample = loaded_rows[:sample_rows]
     columns = sorted({key for row in sample for key in row})
-    valid, reason = _validate_columns(columns, method)
+    valid, reason, format_name, normalize_warnings = _inspect_format(sample, columns, method)
+    warnings.extend(normalize_warnings)
     if method == "grpo" and "answer" not in columns and "target" not in columns:
         warnings.append("GRPO verifier may need an answer/target column depending on the task.")
     return {
@@ -37,7 +38,7 @@ def inspect_llm_dataset(
         "sample_rows": sample,
         "columns": columns,
         "valid": valid,
-        "format": _format_name(columns, method) if valid else None,
+        "format": format_name if valid else None,
         "reason": reason,
         "warnings": warnings,
     }
@@ -71,6 +72,19 @@ def _load_local_json(path: str, sample_rows: int) -> list[dict[str, Any]]:
     raise ValueError("JSON dataset must be a list or contain train/rows/data list")
 
 
+def _inspect_format(
+    sample: list[dict[str, Any]],
+    columns: list[str],
+    method: str,
+) -> tuple[bool, str, str | None, list[str]]:
+    valid, reason = _validate_columns(columns, method)
+    if valid:
+        return True, reason, _format_name(columns, method), []
+    if method == "dpo" and {"chosen", "rejected"} <= set(columns):
+        return _inspect_chat_dpo(sample)
+    return False, reason, None, []
+
+
 def _validate_columns(columns: list[str], method: str) -> tuple[bool, str]:
     col = set(columns)
     if method == "sft":
@@ -86,6 +100,65 @@ def _validate_columns(columns: list[str], method: str) -> tuple[bool, str]:
             return True, "GRPO dataset has prompt column."
         return False, "GRPO requires a prompt column."
     return False, f"Unsupported TRL method: {method}"
+
+
+def _inspect_chat_dpo(sample: list[dict[str, Any]]) -> tuple[bool, str, str | None, list[str]]:
+    warnings: list[str] = []
+    if not sample:
+        return False, "DPO dataset sample is empty.", None, warnings
+    for idx, row in enumerate(sample):
+        prompt = _shared_chat_prompt(row.get("chosen"), row.get("rejected"))
+        chosen_completion = _assistant_completion(row.get("chosen"))
+        rejected_completion = _assistant_completion(row.get("rejected"))
+        if not prompt:
+            return (
+                False,
+                f"DPO chat row {idx} does not have a shared first user prompt.",
+                None,
+                warnings,
+            )
+        if not chosen_completion or not rejected_completion:
+            return (
+                False,
+                f"DPO chat row {idx} requires assistant completions in chosen and rejected.",
+                None,
+                warnings,
+            )
+    warnings.append("DPO prompt/completion fields will be derived from chat-style chosen/rejected messages.")
+    return True, "DPO dataset has chat-style chosen/rejected preference pairs.", "chat_preference_pairs", warnings
+
+
+def _shared_chat_prompt(chosen: Any, rejected: Any) -> str | None:
+    chosen_prompt = _first_user_content(chosen)
+    rejected_prompt = _first_user_content(rejected)
+    if not chosen_prompt or not rejected_prompt:
+        return None
+    if chosen_prompt != rejected_prompt:
+        return None
+    return chosen_prompt
+
+
+def _first_user_content(messages: Any) -> str | None:
+    if not isinstance(messages, list):
+        return None
+    for message in messages:
+        if isinstance(message, dict) and message.get("role") == "user":
+            content = message.get("content")
+            return str(content) if content not in (None, "") else None
+    return None
+
+
+def _assistant_completion(messages: Any) -> str | None:
+    if not isinstance(messages, list):
+        return None
+    parts = [
+        str(message.get("content"))
+        for message in messages
+        if isinstance(message, dict)
+        and message.get("role") == "assistant"
+        and message.get("content") not in (None, "")
+    ]
+    return "\n".join(parts) if parts else None
 
 
 def _format_name(columns: list[str], method: str) -> str:
