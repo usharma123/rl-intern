@@ -26,10 +26,18 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "fastapi",
+    "uvicorn",
+]
+server = [
+    "fastapi",
+    "uvicorn",
 ]
 
 [project.scripts]
 rl-intern = "rl_intern.cli:cli"
+rl-intern-tui = "rl_intern.tui:main"
+rl-intern-server = "rl_intern.server.cli:main"
 
 [build-system]
 requires = ["setuptools>=64"]
@@ -39,7 +47,7 @@ build-backend = "setuptools.build_meta"
 include = ["agent*", "rl_intern*"]
 
 [tool.setuptools.package-data]
-rl_intern = ["templates/*.j2"]
+rl_intern = ["templates/*.j2", "viewer/*.html"]
 agent = ["prompts/*.md"]
 
 [tool.uv]
