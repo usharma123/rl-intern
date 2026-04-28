@@ -1,0 +1,46 @@
+[project]
+name = "rl-intern"
+version = "0.1.0"
+description = "The agent that trains agents."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "litellm",
+    "pydantic",
+    "rich",
+    "typer",
+    "python-dotenv",
+    "gymnasium[classic-control,box2d]>=1.0.0",
+    "stable-baselines3>=2.7.0",
+    "sb3-contrib>=2.7.0",
+    "torch",
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "jinja2",
+    "imageio",
+    "moviepy",
+    "tensorboard",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+rl-intern = "rl_intern.cli:cli"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agent*", "rl_intern*"]
+
+[tool.setuptools.package-data]
+rl_intern = ["templates/*.j2"]
+agent = ["prompts/*.md"]
+
+[tool.uv]
+package = true
