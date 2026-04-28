@@ -16,6 +16,7 @@ class Config(BaseModel):
     save_sessions: bool = False
     yolo_mode: bool = False
     max_iterations: int = 50
+    runner: str = "local"
 
 
 def substitute_env_vars(obj: Any) -> Any:

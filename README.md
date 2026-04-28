@@ -29,6 +29,23 @@ export OPENROUTER_API_KEY="..."
 rl-intern --model openrouter/anthropic/claude-sonnet-4.5 "inspect CartPole-v1"
 ```
 
+## Optional Modal Runner
+
+Local execution is the default. Modal is an optional remote runner for trusted
+Gymnasium/Stable-Baselines3 jobs.
+
+```bash
+uv sync --extra modal
+modal setup
+uv run modal deploy rl_intern/modal_jobs/sb3.py
+uv run rl-intern --runner modal --model openrouter/anthropic/claude-sonnet-4.5 \
+  "train PPO on CartPole-v1 for 10000 timesteps, evaluate it for 20 episodes, record a rollout, and generate a report"
+```
+
+Modal is not used for arbitrary custom code in this version. Generated
+environments, reward functions, and paper reproduction scripts should still run
+locally until sandbox support is added.
+
 ## Interactive TUI
 
 `rl-intern-tui` launches an OpenTUI terminal frontend. The TUI is optional and
@@ -38,7 +55,7 @@ requires Bun because OpenTUI is currently Bun-first.
 cd tui
 bun install
 cd ..
-rl-intern-tui
+rl-intern-tui --model openrouter/anthropic/claude-sonnet-4.5
 ```
 
 The TUI starts the Python backend over newline-delimited JSON and keeps Python
@@ -84,6 +101,7 @@ open https://openai.github.io/euphony/ and load
 - Evaluates policies across episodes
 - Records rollout videos
 - Generates Markdown experiment reports
+- Optionally launches trusted SB3 jobs on Modal
 
 ## v0.1 Supported Algorithms
 

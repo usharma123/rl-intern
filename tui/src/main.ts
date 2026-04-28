@@ -12,7 +12,9 @@ const backend = new Backend((event) => {
 const args = Bun.argv.slice(2)
 const modelIndex = args.indexOf("--model")
 const model = modelIndex >= 0 ? args[modelIndex + 1] : undefined
-backend.start(model)
+const runnerIndex = args.indexOf("--runner")
+const runner = runnerIndex >= 0 ? args[runnerIndex + 1] : undefined
+backend.start(model, runner)
 
 let prompt = ""
 

@@ -45,6 +45,7 @@ def test_rpc_start_user_input_and_shutdown(tmp_path):
                     "type": "start_run",
                     "id": "start",
                     "model": "openrouter/anthropic/claude-sonnet-4.5",
+                    "runner": "modal",
                     "max_iterations": 0,
                 }
             )
@@ -54,6 +55,8 @@ def test_rpc_start_user_input_and_shutdown(tmp_path):
         ready = _read_json_line(proc)
         assert ready["type"] == "ready"
         assert ready["run_id"]
+        metadata_path = tmp_path / "artifacts" / "runs" / ready["run_id"] / "metadata.json"
+        assert json.loads(metadata_path.read_text(encoding="utf-8"))["runner"] == "modal"
 
         proc.stdin.write(json.dumps({"type": "user_input", "id": "u1", "text": "hello"}) + "\n")
         proc.stdin.flush()

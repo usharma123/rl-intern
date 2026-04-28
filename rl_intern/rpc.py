@@ -107,6 +107,8 @@ class RpcRuntime:
         config = load_config()
         if message.get("model"):
             config.model_name = message["model"]
+        if message.get("runner"):
+            config.runner = message["runner"]
         if message.get("max_iterations") is not None:
             config.max_iterations = int(message["max_iterations"])
         if message.get("yolo") is not None:
@@ -116,6 +118,7 @@ class RpcRuntime:
             run_id=message.get("run_id"),
             model=config.model_name,
             prompt=message.get("prompt"),
+            runner=config.runner,
         )
         self.run_id = record.run_id
         self.run_dir = str(record.run_dir)

@@ -44,10 +44,12 @@ async def _run_agent_prompt(
     max_iterations: int | None,
     stream: bool,
     headless: bool,
+    runner: str,
 ) -> None:
     config = load_config()
     if model:
         config.model_name = model
+    config.runner = runner
     if max_iterations is not None:
         config.max_iterations = max_iterations
     if headless:
@@ -58,7 +60,11 @@ async def _run_agent_prompt(
     tool_router = ToolRouter(local_mode=True)
     session_holder: list = [None]
     run_store = RunStore()
-    run_record = run_store.create_run(model=config.model_name, prompt=prompt)
+    run_record = run_store.create_run(
+        model=config.model_name,
+        prompt=prompt,
+        runner=runner,
+    )
     print(f"Run: {run_record.run_id}", file=sys.stderr)
 
     agent_task = asyncio.create_task(
@@ -148,7 +154,12 @@ async def _run_agent_prompt(
         agent_task.cancel()
 
 
-async def _interactive(model: str | None, max_iterations: int | None, stream: bool) -> None:
+async def _interactive(
+    model: str | None,
+    max_iterations: int | None,
+    stream: bool,
+    runner: str,
+) -> None:
     print("rl-intern")
     print("Type /exit to quit.")
     while True:
@@ -167,6 +178,7 @@ async def _interactive(model: str | None, max_iterations: int | None, stream: bo
             max_iterations=max_iterations,
             stream=stream,
             headless=False,
+            runner=runner,
         )
 
 
@@ -178,6 +190,12 @@ def cli() -> None:
     )
     parser.add_argument("prompt", nargs="?", default=None, help="Run one prompt headlessly.")
     parser.add_argument("--model", "-m", default=None, help="LiteLLM model name.")
+    parser.add_argument(
+        "--runner",
+        choices=["local", "modal"],
+        default="local",
+        help="Execution backend for RL experiments.",
+    )
     parser.add_argument("--max-iterations", type=int, default=None)
     parser.add_argument("--no-stream", action="store_true", help="Disable token streaming.")
     args = parser.parse_args()
@@ -191,6 +209,7 @@ def cli() -> None:
                     max_iterations=args.max_iterations,
                     stream=not args.no_stream,
                     headless=True,
+                    runner=args.runner,
                 )
             )
         else:
@@ -199,6 +218,7 @@ def cli() -> None:
                     model=args.model,
                     max_iterations=args.max_iterations,
                     stream=not args.no_stream,
+                    runner=args.runner,
                 )
             )
     except KeyboardInterrupt:

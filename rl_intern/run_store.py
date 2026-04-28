@@ -33,6 +33,7 @@ class RunStore:
         run_id: str | None = None,
         model: str | None = None,
         prompt: str | None = None,
+        runner: str = "local",
     ) -> RunRecord:
         run_id = run_id or make_run_id()
         run_dir = self.root / run_id
@@ -49,12 +50,21 @@ class RunStore:
             "updated_at": utc_now_iso(),
             "model": model,
             "prompt": prompt,
+            "runner": runner,
             "run_dir": str(run_dir),
             "session_path": str(record.session_path),
         }
         self._atomic_json(record.metadata_path, metadata)
         record.session_path.touch(exist_ok=True)
         return record
+
+    def update_metadata(self, run_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        record = self.get_run(run_id)
+        metadata = self.load_metadata(run_id)
+        metadata.update(updates)
+        metadata["updated_at"] = utc_now_iso()
+        self._atomic_json(record.metadata_path, metadata)
+        return metadata
 
     def get_run(self, run_id: str) -> RunRecord:
         run_dir = self.root / run_id

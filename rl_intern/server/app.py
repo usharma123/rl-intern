@@ -12,6 +12,7 @@ class CreateRunRequest(BaseModel):
     run_id: str | None = None
     model: str | None = None
     prompt: str | None = None
+    runner: str = "local"
 
 
 def create_app(run_store: RunStore | None = None) -> FastAPI:
@@ -24,6 +25,7 @@ def create_app(run_store: RunStore | None = None) -> FastAPI:
             run_id=request.run_id,
             model=request.model,
             prompt=request.prompt,
+            runner=request.runner,
         )
         return store.load_metadata(record.run_id)
 

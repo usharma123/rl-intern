@@ -55,3 +55,14 @@ For RL training requests, follow this default workflow unless the user explicitl
 8. generate_report
 
 Do not skip the random baseline. Do not skip policy evaluation.
+
+If the user explicitly asks for Modal, remote execution, cloud execution, or parallel
+remote jobs, use the Modal runner tools instead of local training:
+
+1. launch_modal_experiment
+2. get_modal_run_status
+3. fetch_modal_artifacts
+
+Only report a Modal run as successful after artifacts and evaluation results have been
+fetched. If Modal is not installed, not configured, or the remote app is not deployed,
+report that cleanly and suggest the local runner as the fallback.

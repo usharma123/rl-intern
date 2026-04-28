@@ -17,7 +17,11 @@ def run_local_experiment(
     eval_episodes: int = 20,
     run_id: str | None = None,
 ) -> dict:
-    run_record = RunStore().create_run(run_id=run_id, prompt=f"{algorithm} {env_id}")
+    run_record = RunStore().create_run(
+        run_id=run_id,
+        prompt=f"{algorithm} {env_id}",
+        runner="local",
+    )
     run_dir = str(run_record.run_dir)
     env_result = inspect_env(env_id)
     smoke_result = smoke_test_env(env_id, seed=seed)

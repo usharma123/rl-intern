@@ -33,6 +33,9 @@ server = [
     "fastapi",
     "uvicorn",
 ]
+modal = [
+    "modal",
+]
 
 [project.scripts]
 rl-intern = "rl_intern.cli:cli"

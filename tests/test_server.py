@@ -13,6 +13,9 @@ def test_run_server_endpoints(tmp_path):
     client = TestClient(create_app(store))
 
     assert client.get("/runs").status_code == 200
+    created = client.post("/runs", json={"run_id": "run_modal_server", "runner": "modal"})
+    assert created.status_code == 200
+    assert created.json()["runner"] == "modal"
     detail = client.get("/runs/run_server")
     assert detail.status_code == 200
     assert detail.json()["metadata"]["run_id"] == "run_server"

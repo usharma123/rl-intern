@@ -33,7 +33,20 @@ def _validate_tool_args(tool_args: dict[str, Any]) -> tuple[bool, str | None]:
 def _needs_approval(tool_name: str, config: Config | None = None) -> bool:
     if config and config.yolo_mode:
         return False
-    return tool_name == "train_sb3"
+    return tool_name in {"train_sb3", "launch_modal_experiment"}
+
+
+def _runner_user_text(session: Session, text: str) -> str:
+    if getattr(session.config, "runner", "local") != "modal":
+        return text
+    return (
+        "Use the Modal remote runner for trusted SB3 execution. "
+        "For training/evaluation/report requests, call launch_modal_experiment, "
+        "then get_modal_run_status, then fetch_modal_artifacts before reporting success. "
+        "Do not use local train_sb3/evaluate_policy/record_rollout/generate_report unless "
+        "the Modal tool reports an error that requires local fallback. "
+        f"User request: {text}"
+    )
 
 
 def _friendly_error_message(error: Exception) -> str | None:
@@ -434,6 +447,9 @@ async def _execute_tools(
             "evaluate_policy",
             "record_rollout",
             "generate_report",
+            "launch_modal_experiment",
+            "get_modal_run_status",
+            "fetch_modal_artifacts",
         }:
             args = {**args, "run_dir": session.run_dir}
         prepared_tools.append((tc, name, args))
@@ -485,7 +501,7 @@ async def process_submission(session: Session, submission) -> bool:
     op = submission.operation
     if op.op_type == OpType.USER_INPUT:
         text = op.data.get("text", "") if op.data else ""
-        await Handlers.run_agent(session, text)
+        await Handlers.run_agent(session, _runner_user_text(session, text))
         return True
     if op.op_type == OpType.COMPACT:
         await _compact_and_notify(session)

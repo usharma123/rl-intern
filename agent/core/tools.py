@@ -7,6 +7,11 @@ from agent.tools.common import tool_handler
 from agent.tools.env_inspect import inspect_env
 from agent.tools.env_smoke_test import smoke_test_env
 from agent.tools.evaluate_policy import evaluate_policy
+from agent.tools.modal_runner import (
+    fetch_modal_artifacts,
+    get_modal_run_status,
+    launch_modal_experiment,
+)
 from agent.tools.random_baseline import run_random_baseline
 from agent.tools.record_rollout import record_rollout
 from agent.tools.report import generate_report
@@ -205,6 +210,47 @@ def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
                 ],
             ),
             handler=tool_handler(generate_report),
+        ),
+        ToolSpec(
+            name="launch_modal_experiment",
+            description="Launch a trusted remote Modal job for a full SB3 RL experiment and return Modal job metadata.",
+            parameters=_schema(
+                {
+                    "env_id": {"type": "string"},
+                    "algorithm": {"type": "string", "enum": ["PPO", "DQN"], "default": "PPO"},
+                    "total_timesteps": {"type": "integer", "default": 100000},
+                    "seed": {"type": "integer", "default": 0},
+                    "eval_episodes": {"type": "integer", "default": 20},
+                    "max_steps": {"type": "integer", "default": 1000},
+                    "run_id": {"type": ["string", "null"]},
+                },
+                ["env_id"],
+            ),
+            handler=tool_handler(launch_modal_experiment),
+        ),
+        ToolSpec(
+            name="get_modal_run_status",
+            description="Poll a Modal function call for status or completed RL experiment results.",
+            parameters=_schema(
+                {
+                    "modal_call_id": {"type": "string"},
+                    "timeout": {"type": "number", "default": 0},
+                },
+                ["modal_call_id"],
+            ),
+            handler=tool_handler(get_modal_run_status),
+        ),
+        ToolSpec(
+            name="fetch_modal_artifacts",
+            description="Fetch completed Modal job artifacts into the local run directory.",
+            parameters=_schema(
+                {
+                    "modal_call_id": {"type": "string"},
+                    "timeout": {"type": "number", "default": 0},
+                },
+                ["modal_call_id"],
+            ),
+            handler=tool_handler(fetch_modal_artifacts),
         ),
     ]
     logger.info("Loaded %d built-in RL tools", len(tools))

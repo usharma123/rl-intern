@@ -7,7 +7,7 @@ export class Backend {
 
   constructor(private onEvent: (event: RpcEvent) => void) {}
 
-  start(model?: string) {
+  start(model?: string, runner?: string) {
     const root = process.env.RL_INTERN_PROJECT_ROOT ?? process.cwd()
     this.proc = spawn({
       cmd: ["uv", "run", "python", "-m", "rl_intern.rpc"],
@@ -21,6 +21,7 @@ export class Backend {
       type: "start_run",
       id: "start",
       model,
+      runner,
     })
   }
 
