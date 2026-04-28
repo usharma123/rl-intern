@@ -484,6 +484,7 @@ async def _execute_tools(
             "modal_job_status",
             "modal_job_logs",
             "modal_job_artifacts",
+            "modal_job_cancel",
         }:
             args = {**args, "run_dir": session.run_dir}
         prepared_tools.append((tc, name, args))

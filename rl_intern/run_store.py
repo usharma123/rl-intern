@@ -3,6 +3,7 @@ import os
 import shutil
 import uuid
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from rl_intern.events import to_json_line, utc_now_iso
 
 
 DEFAULT_RUNS_ROOT = Path("artifacts") / "runs"
+DELETED_RUNS_DIR = ".deleted_runs"
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ class RunStore:
         runner: str = "local",
     ) -> RunRecord:
         run_id = run_id or make_run_id()
+        self._clear_deleted(run_id)
         run_dir = self.root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         record = RunRecord(
@@ -79,6 +82,8 @@ class RunStore:
         )
 
     def append_event(self, run_id: str, event: dict[str, Any]) -> None:
+        if self.is_deleted(run_id):
+            return
         record = self.get_run(run_id)
         record.run_dir.mkdir(parents=True, exist_ok=True)
         with record.session_path.open("a", encoding="utf-8") as f:
@@ -105,7 +110,7 @@ class RunStore:
             return []
         runs = []
         for path in sorted(self.root.iterdir(), reverse=True):
-            if not path.is_dir():
+            if not path.is_dir() or path.name == DELETED_RUNS_DIR or self.is_deleted(path.name):
                 continue
             metadata_path = path / "metadata.json"
             if metadata_path.exists():
@@ -118,6 +123,8 @@ class RunStore:
         return runs
 
     def read_events(self, run_id: str) -> list[dict[str, Any]]:
+        if self.is_deleted(run_id):
+            return []
         record = self.get_run(run_id)
         if not record.session_path.exists():
             return []
@@ -132,6 +139,8 @@ class RunStore:
         return events
 
     def list_artifacts(self, run_id: str) -> list[dict[str, Any]]:
+        if self.is_deleted(run_id):
+            return []
         record = self.get_run(run_id)
         if not record.run_dir.exists():
             return []
@@ -157,7 +166,25 @@ class RunStore:
         if root not in run_dir.parents:
             raise ValueError(f"Refusing to delete run outside root: {run_dir}")
         shutil.rmtree(run_dir)
+        self._mark_deleted(run_id)
         return True
+
+    def is_deleted(self, run_id: str) -> bool:
+        return self._deleted_marker(run_id).exists()
+
+    def _mark_deleted(self, run_id: str) -> None:
+        marker = self._deleted_marker(run_id)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(run_id, encoding="utf-8")
+
+    def _clear_deleted(self, run_id: str) -> None:
+        try:
+            self._deleted_marker(run_id).unlink()
+        except FileNotFoundError:
+            pass
+
+    def _deleted_marker(self, run_id: str) -> Path:
+        return self.root / DELETED_RUNS_DIR / sha256(run_id.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _atomic_json(path: Path, payload: dict[str, Any]) -> None:

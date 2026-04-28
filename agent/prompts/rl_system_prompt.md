@@ -82,6 +82,17 @@ remote jobs, use the generic Modal runner tools instead of local training:
 4. modal_job_status / modal_job_logs to monitor
 5. modal_job_artifacts to sync outputs
 
+When a generated training script fails:
+
+- Fetch status/logs/artifacts first and identify the exact failing line or configuration.
+- Read the persisted script with read_run_file.
+- Edit the persisted script with edit_run_file or write_run_file.
+- Relaunch from the edited script. Do not create an unrelated one-off script unless the
+  user explicitly asks for a scratch experiment.
+- Do not rerun prepare before relaunching an edited script, because prepare regenerates
+  the baseline script.
+- If the fix should apply to future runs, explain that the generator should be patched too.
+
 Only report a Modal run as successful after artifacts and evaluation results have been
 fetched. If Modal is not installed, not configured, or the remote app is not deployed,
 report that cleanly and suggest the local runner as the fallback.

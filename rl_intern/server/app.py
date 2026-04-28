@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import sys
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -74,15 +73,16 @@ def create_app(run_store: RunStore | None = None) -> FastAPI:
 
     @app.post("/api/session")
     def create_session() -> dict[str, Any]:
-        """Allocate a session id without spawning the agent yet.
+        """Allocate a session id and create its local run directory.
 
         The frontend calls this from the welcome screen and then opens the
         chat WebSocket with `?session_id=<id>` — the WS spawns a fresh
         rl_intern.rpc subprocess and asks it to start a run with that id, so
         the browser's session id and the on-disk run id stay aligned.
         """
+        record = store.create_run()
         return {
-            "session_id": f"run_{uuid.uuid4().hex[:12]}",
+            "session_id": record.run_id,
             "created_at": _utc_now_iso(),
         }
 
@@ -124,6 +124,7 @@ def create_app(run_store: RunStore | None = None) -> FastAPI:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=2 * 1024 * 1024,
             )
         except Exception as exc:  # noqa: BLE001
             await send_bridge(
@@ -143,7 +144,16 @@ def create_app(run_store: RunStore | None = None) -> FastAPI:
 
         async def pump_rpc_to_client() -> None:
             while True:
-                line = await proc.stdout.readline()
+                try:
+                    line = await proc.stdout.readline()
+                except ValueError as exc:
+                    await send_bridge(
+                        "bridge_log",
+                        level="error",
+                        source="stdout",
+                        line=f"agent emitted an oversized event line: {exc}",
+                    )
+                    return
                 if not line:
                     return
                 try:
@@ -267,7 +277,10 @@ def create_app(run_store: RunStore | None = None) -> FastAPI:
     def events_jsonl(run_id: str) -> PlainTextResponse:
         record = store.get_run(run_id)
         if not record.session_path.exists():
-            raise HTTPException(status_code=404, detail="Run log not found")
+            if record.run_dir.exists():
+                record.session_path.touch()
+            else:
+                raise HTTPException(status_code=404, detail="Run log not found")
         return PlainTextResponse(
             record.session_path.read_text(encoding="utf-8"),
             media_type="application/x-ndjson",

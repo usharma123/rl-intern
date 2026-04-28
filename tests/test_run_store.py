@@ -75,3 +75,21 @@ def test_delete_run_removes_local_directory(tmp_path):
     assert store.delete_run("run_delete") is True
     assert not record.run_dir.exists()
     assert store.delete_run("run_delete") is False
+
+
+def test_deleted_run_ignores_late_events_until_recreated(tmp_path):
+    store = RunStore(tmp_path / "runs")
+    record = store.create_run(run_id="run_late_delete")
+
+    assert store.delete_run(record.run_id) is True
+    store.append_event(record.run_id, {"type": "shutdown"})
+
+    assert not record.run_dir.exists()
+    assert store.list_runs() == []
+    assert store.read_events(record.run_id) == []
+
+    recreated = store.create_run(run_id=record.run_id)
+    store.append_event(recreated.run_id, {"type": "ready"})
+
+    assert store.list_runs()[0]["run_id"] == record.run_id
+    assert store.read_events(record.run_id)[0]["type"] == "ready"

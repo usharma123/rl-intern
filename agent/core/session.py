@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from agent.config import Config
 from agent.context_manager.manager import ContextManager
+from litellm import ChatCompletionMessageToolCall, Message
 from rl_intern.events import normalize_event
 from rl_intern.run_store import RunStore
 
@@ -82,6 +83,7 @@ class Session:
         self.run_dir = run_dir
         self.run_store = run_store
         self.current_turn_id: str | None = None
+        self._restore_context_from_run_log()
 
     async def send_event(self, event: Event) -> None:
         await self.event_queue.put(event)
@@ -137,3 +139,112 @@ class Session:
         except Exception as exc:
             logger.warning("Failed to save session locally: %s", exc)
             return None
+
+    def _restore_context_from_run_log(self) -> None:
+        if not self.run_store or not self.run_id:
+            return
+        try:
+            events = self.run_store.read_events(self.run_id)
+        except Exception as exc:
+            logger.warning("Failed to restore session context for %s: %s", self.run_id, exc)
+            return
+        if not events:
+            return
+
+        pending_content: list[str] = []
+        pending_tool_calls: list[ChatCompletionMessageToolCall] = []
+        tool_calls_flushed = False
+
+        def flush_assistant_with_tools() -> None:
+            nonlocal pending_content, pending_tool_calls, tool_calls_flushed
+            if not pending_tool_calls or tool_calls_flushed:
+                return
+            self.context_manager.add_message(
+                Message(
+                    role="assistant",
+                    content="".join(pending_content) or None,
+                    tool_calls=pending_tool_calls,
+                )
+            )
+            pending_content = []
+            tool_calls_flushed = True
+
+        def flush_plain_assistant() -> None:
+            nonlocal pending_content
+            if pending_content:
+                self.context_manager.add_message(
+                    Message(role="assistant", content="".join(pending_content))
+                )
+                pending_content = []
+
+        def reset_tool_group() -> None:
+            nonlocal pending_tool_calls, tool_calls_flushed
+            pending_tool_calls = []
+            tool_calls_flushed = False
+
+        for event in events:
+            event_type = event.get("type")
+            if event_type == "user_input":
+                if pending_tool_calls:
+                    flush_assistant_with_tools()
+                    reset_tool_group()
+                else:
+                    flush_plain_assistant()
+                content = event.get("content") or event.get("data", {}).get("text")
+                if content:
+                    self.context_manager.add_message(Message(role="user", content=str(content)))
+                continue
+
+            if event_type == "assistant_chunk":
+                if pending_tool_calls and tool_calls_flushed:
+                    reset_tool_group()
+                pending_content.append(str(event.get("content") or event.get("data", {}).get("content") or ""))
+                continue
+
+            if event_type == "tool_call":
+                if pending_tool_calls and tool_calls_flushed:
+                    reset_tool_group()
+                data = event.get("data") or {}
+                arguments = data.get("arguments") if isinstance(data.get("arguments"), dict) else event.get("input", {})
+                tool_call_id = str(event.get("tool_call_id") or data.get("tool_call_id") or uuid.uuid4())
+                actual_tool = str(data.get("actual_tool") or data.get("tool") or event.get("tool") or "")
+                pending_tool_calls.append(
+                    ChatCompletionMessageToolCall(
+                        id=tool_call_id,
+                        type="function",
+                        function={
+                            "name": actual_tool,
+                            "arguments": json.dumps(arguments or {}, sort_keys=True),
+                        },
+                    )
+                )
+                continue
+
+            if event_type == "tool_output":
+                flush_assistant_with_tools()
+                data = event.get("data") or {}
+                output = data.get("output", event.get("output", event.get("content", "")))
+                tool_name = str(data.get("actual_tool") or data.get("tool") or event.get("tool") or "")
+                tool_call_id = str(event.get("tool_call_id") or data.get("tool_call_id") or "")
+                if tool_call_id:
+                    self.context_manager.add_message(
+                        Message(
+                            role="tool",
+                            content=output if isinstance(output, str) else json.dumps(output, sort_keys=True),
+                            tool_call_id=tool_call_id,
+                            name=tool_name,
+                        )
+                    )
+                continue
+
+            if event_type == "turn_complete":
+                if pending_tool_calls:
+                    flush_assistant_with_tools()
+                else:
+                    flush_plain_assistant()
+                reset_tool_group()
+
+        if pending_tool_calls:
+            flush_assistant_with_tools()
+        else:
+            flush_plain_assistant()

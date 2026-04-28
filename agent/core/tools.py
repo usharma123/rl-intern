@@ -51,6 +51,11 @@ from agent.tools.research_tools import (
     research_handler,
     web_search_handler,
 )
+from agent.tools.run_files import (
+    edit_run_file_handler,
+    read_run_file_handler,
+    write_run_file_handler,
+)
 from agent.tools.train_sb3 import train_sb3
 
 logger = logging.getLogger(__name__)
@@ -312,6 +317,36 @@ def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
             description="Generate a baseline TRL SFT/DPO/GRPO training script.",
             parameters=_schema({"method": {"type": "string", "enum": ["sft", "dpo", "grpo"]}}, ["method"]),
             handler=generate_trl_script_handler,
+        ),
+        ToolSpec(
+            name="read_run_file",
+            description="Read a local file inside a run directory, such as a generated training script or log.",
+            parameters=_schema({"run_dir": {"type": "string"}, "path": {"type": "string"}}, ["run_dir", "path"]),
+            handler=read_run_file_handler,
+        ),
+        ToolSpec(
+            name="write_run_file",
+            description="Write a local file inside a run directory, such as an edited training script.",
+            parameters=_schema(
+                {"run_dir": {"type": "string"}, "path": {"type": "string"}, "content": {"type": "string"}},
+                ["run_dir", "path", "content"],
+            ),
+            handler=write_run_file_handler,
+        ),
+        ToolSpec(
+            name="edit_run_file",
+            description="Edit a local file inside a run directory by string replacement.",
+            parameters=_schema(
+                {
+                    "run_dir": {"type": "string"},
+                    "path": {"type": "string"},
+                    "old_str": {"type": "string"},
+                    "new_str": {"type": "string"},
+                    "replace_all": {"type": "boolean", "default": False},
+                },
+                ["run_dir", "path", "old_str", "new_str"],
+            ),
+            handler=edit_run_file_handler,
         ),
         ToolSpec(
             name="modal_sandbox_create",
