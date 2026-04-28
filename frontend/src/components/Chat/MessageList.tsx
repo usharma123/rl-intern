@@ -55,7 +55,7 @@ export default function MessageList({ messages }: Props) {
         flexDirection: 'column',
       }}
     >
-      <Box sx={{ width: '100%', maxWidth: 880, mx: 'auto', flex: 1 }}>
+      <Box sx={{ width: '100%', maxWidth: 880, mx: 'auto', mt: 'auto' }}>
         {messages.map((m) => {
           if (m.kind === 'user') return <UserMessage key={m.id} text={m.text} />;
           if (m.kind === 'assistant')

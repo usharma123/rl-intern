@@ -1,4 +1,6 @@
-import { Box, Typography } from '@mui/material';
+import { Box, IconButton, Tooltip, Typography } from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
+import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import type {
   ArtifactDashboardState,
   JobDashboardState,
@@ -10,6 +12,19 @@ interface Props {
   plan: PlanDashboardState;
   jobs: JobDashboardState[];
   artifacts: ArtifactDashboardState;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+export function hasRunDashboardContent(
+  plan: PlanDashboardState,
+  jobs: JobDashboardState[],
+  artifacts: ArtifactDashboardState,
+): boolean {
+  const hasPlan = Boolean(plan.plan || plan.stage);
+  const hasJobs = jobs.length > 0;
+  const count = artifactCount(artifacts.manifest);
+  return hasPlan || hasJobs || count > 0;
 }
 
 function tone(status?: string): StatusTone {
@@ -49,8 +64,10 @@ function artifactBuckets(manifest?: Record<string, unknown>) {
     const names = items
       .slice(-2)
       .map((item) => {
-        if (item && typeof item === 'object' && 'name' in item) return String((item as { name?: unknown }).name);
-        if (item && typeof item === 'object' && 'path' in item) return String((item as { path?: unknown }).path).split('/').pop();
+        if (item && typeof item === 'object' && 'name' in item)
+          return String((item as { name?: unknown }).name);
+        if (item && typeof item === 'object' && 'path' in item)
+          return String((item as { path?: unknown }).path).split('/').pop();
         return String(item);
       })
       .filter(Boolean);
@@ -58,139 +75,346 @@ function artifactBuckets(manifest?: Record<string, unknown>) {
   }).filter(Boolean) as Array<{ bucket: string; count: number; names: string[] }>;
 }
 
-export default function RunDashboard({ plan, jobs, artifacts }: Props) {
-  const hasPlan = Boolean(plan.plan || plan.stage);
-  const hasJobs = jobs.length > 0;
-  const count = artifactCount(artifacts.manifest);
-  if (!hasPlan && !hasJobs && count === 0) return null;
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <Typography
+      sx={{
+        fontFamily: 'var(--font-mono)',
+        fontSize: '0.6rem',
+        color: 'var(--text-faint)',
+        letterSpacing: '0.18em',
+        mb: 0.875,
+        textTransform: 'uppercase',
+      }}
+    >
+      {children}
+    </Typography>
+  );
+}
 
+export default function RunDashboard({ plan, jobs, artifacts, open, onOpenChange }: Props) {
+  if (!hasRunDashboardContent(plan, jobs, artifacts)) return null;
+
+  const count = artifactCount(artifacts.manifest);
   const domain = String(plan.plan?.domain ?? 'no-domain');
   const objective = String(plan.plan?.objective ?? 'experiment plan pending');
   const stage = plan.stage ?? 'no active stage';
   const status = plan.status ?? 'updated';
+  const buckets = artifactBuckets(artifacts.manifest);
+
+  // Collapsed: small floating tab to reopen
+  if (!open) {
+    return (
+      <Tooltip title="show run monitor" placement="left">
+        <IconButton
+          onClick={() => onOpenChange(true)}
+          aria-label="show run monitor"
+          sx={{
+            position: 'absolute',
+            top: 16,
+            right: 16,
+            zIndex: 12,
+            width: 36,
+            height: 36,
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border-strong)',
+            background: 'rgba(12, 13, 15, 0.85)',
+            backdropFilter: 'saturate(140%) blur(8px)',
+            color: 'var(--accent)',
+            transition: 'border-color 120ms, background 120ms, box-shadow 120ms',
+            '&:hover': {
+              borderColor: 'var(--accent-border)',
+              background: 'var(--accent-soft)',
+              boxShadow: '0 0 0 1px var(--accent-border), 0 0 20px rgba(127, 238, 100, 0.12)',
+            },
+          }}
+        >
+          <InsightsOutlinedIcon sx={{ fontSize: 18 }} />
+        </IconButton>
+      </Tooltip>
+    );
+  }
 
   return (
     <Box
       sx={{
-        mx: { xs: 1.5, md: 2.5 },
-        mt: 1.25,
-        p: 1.25,
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-md)',
-        background: 'var(--surface)',
-        display: 'grid',
-        gridTemplateColumns: { xs: '1fr', md: '1.5fr 1fr 0.7fr' },
-        gap: 1.25,
+        position: 'absolute',
+        top: 16,
+        right: 16,
+        bottom: 84,
+        width: { xs: 'calc(100% - 24px)', sm: 320 },
+        maxHeight: 'calc(100% - 100px)',
+        zIndex: 12,
+        display: 'flex',
+        flexDirection: 'column',
+        borderRadius: 'var(--radius-lg)',
+        border: '1px solid var(--border-strong)',
+        background:
+          'linear-gradient(180deg, rgba(16, 18, 20, 0.92) 0%, rgba(10, 11, 12, 0.92) 100%)',
+        backdropFilter: 'saturate(160%) blur(14px)',
+        boxShadow:
+          '0 0 0 1px rgba(127, 238, 100, 0.06), 0 18px 48px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4)',
+        overflow: 'hidden',
+        animation: 'rli-panel-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+        '@keyframes rli-panel-in': {
+          '0%': { opacity: 0, transform: 'translateX(8px) scale(0.985)' },
+          '100%': { opacity: 1, transform: 'translateX(0) scale(1)' },
+        },
+        '&::before': {
+          content: '""',
+          position: 'absolute',
+          inset: 0,
+          pointerEvents: 'none',
+          borderRadius: 'inherit',
+          background:
+            'radial-gradient(120% 60% at 100% 0%, rgba(127, 238, 100, 0.06), transparent 60%)',
+        },
       }}
     >
-      <Box sx={{ minWidth: 0 }}>
+      {/* Header bar */}
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          px: 1.5,
+          py: 1.125,
+          borderBottom: '1px solid var(--border)',
+          flexShrink: 0,
+        }}
+      >
+        <Box
+          sx={{
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            bgcolor: 'var(--accent)',
+            boxShadow: '0 0 8px rgba(127, 238, 100, 0.6)',
+          }}
+        />
         <Typography
           sx={{
             fontFamily: 'var(--font-mono)',
-            fontSize: '0.62rem',
-            color: 'var(--text-faint)',
-            letterSpacing: '0.16em',
-            mb: 0.5,
-          }}
-        >
-          PLAN
-        </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-          <StatusChip label={status.toUpperCase()} tone={tone(status)} />
-          <Typography
-            sx={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.75rem',
-              color: 'var(--accent)',
-            }}
-          >
-            {domain}
-          </Typography>
-        </Box>
-        <Typography
-          sx={{
-            fontSize: '0.82rem',
+            fontSize: '0.68rem',
             color: 'var(--text)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
+            letterSpacing: '0.18em',
+            textTransform: 'uppercase',
+            fontWeight: 600,
+            flex: 1,
           }}
         >
-          {objective}
+          run monitor
         </Typography>
-        <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-          stage: {stage}
-        </Typography>
+        <Tooltip title="hide">
+          <IconButton
+            size="small"
+            onClick={() => onOpenChange(false)}
+            aria-label="hide run monitor"
+            sx={{ width: 22, height: 22 }}
+          >
+            <CloseIcon sx={{ fontSize: 14 }} />
+          </IconButton>
+        </Tooltip>
       </Box>
 
-      <Box sx={{ minWidth: 0 }}>
-        <Typography
-          sx={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '0.62rem',
-            color: 'var(--text-faint)',
-            letterSpacing: '0.16em',
-            mb: 0.5,
-          }}
-        >
-          JOBS
-        </Typography>
-        {jobs.length === 0 ? (
-          <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-            no remote jobs
-          </Typography>
-        ) : (
-          jobs.slice(0, 3).map((job, idx) => (
-            <Box key={`${job.jobId}-${job.backendId}-${idx}`} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.35 }}>
-              <StatusChip label={(job.status ?? 'JOB').toUpperCase()} tone={tone(job.status)} />
-              <Typography
-                sx={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '0.72rem',
-                  color: job.error ? 'var(--error)' : 'var(--text)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {job.stage ?? job.hardware ?? job.jobId ?? job.backendId}
-              </Typography>
-            </Box>
-          ))
-        )}
-      </Box>
-
-      <Box sx={{ minWidth: 0 }}>
-        <Typography
-          sx={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '0.62rem',
-            color: 'var(--text-faint)',
-            letterSpacing: '0.16em',
-            mb: 0.5,
-          }}
-        >
-          ARTIFACTS
-        </Typography>
-        <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: '1.4rem', color: 'var(--accent)', lineHeight: 1 }}>
-          {count}
-        </Typography>
-        {artifactBuckets(artifacts.manifest).slice(0, 4).map((bucket) => (
+      {/* Body */}
+      <Box
+        sx={{
+          flex: 1,
+          overflow: 'auto',
+          px: 1.75,
+          py: 1.5,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1.75,
+          position: 'relative',
+        }}
+      >
+        {/* PLAN */}
+        <Box>
+          <SectionLabel>plan</SectionLabel>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.875, mb: 0.875 }}>
+            <StatusChip label={status.toUpperCase()} tone={tone(status)} />
+            <Typography
+              sx={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.74rem',
+                color: 'var(--accent)',
+                letterSpacing: '-0.005em',
+              }}
+            >
+              {domain}
+            </Typography>
+          </Box>
           <Typography
-            key={bucket.bucket}
             sx={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.68rem',
-              color: bucket.bucket === 'errors' ? 'var(--error)' : 'var(--text-muted)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              fontSize: '0.82rem',
+              color: 'var(--text)',
+              lineHeight: 1.45,
+              letterSpacing: '-0.005em',
+              mb: 0.625,
             }}
           >
-            {bucket.bucket}: {bucket.count}
-            {bucket.names.length ? ` - ${bucket.names.join(', ')}` : ''}
+            {objective}
           </Typography>
-        ))}
+          <Box
+            sx={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 0.625,
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.7rem',
+              color: 'var(--text-muted)',
+              px: 0.875,
+              py: 0.375,
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--code-bg)',
+              border: '1px solid var(--border)',
+            }}
+          >
+            <Box component="span" sx={{ color: 'var(--text-faint)' }}>
+              stage
+            </Box>
+            <Box component="span" sx={{ color: 'var(--text)' }}>
+              {stage}
+            </Box>
+          </Box>
+        </Box>
+
+        <Box sx={{ height: '1px', flexShrink: 0, background: 'var(--border)' }} />
+
+        {/* JOBS */}
+        <Box>
+          <SectionLabel>jobs · {jobs.length}</SectionLabel>
+          {jobs.length === 0 ? (
+            <Typography
+              sx={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.74rem',
+                color: 'var(--text-faint)',
+              }}
+            >
+              no remote jobs
+            </Typography>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.625 }}>
+              {jobs.slice(0, 6).map((job, idx) => (
+                <Box
+                  key={`${job.jobId}-${job.backendId}-${idx}`}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0.875,
+                    px: 0.875,
+                    py: 0.625,
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    background: 'rgba(255, 255, 255, 0.012)',
+                  }}
+                >
+                  <StatusChip label={(job.status ?? 'JOB').toUpperCase()} tone={tone(job.status)} />
+                  <Typography
+                    sx={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '0.72rem',
+                      color: job.error ? 'var(--error)' : 'var(--text)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    {job.stage ?? job.hardware ?? job.jobId ?? job.backendId}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
+          )}
+        </Box>
+
+        <Box sx={{ height: '1px', flexShrink: 0, background: 'var(--border)' }} />
+
+        {/* ARTIFACTS */}
+        <Box>
+          <SectionLabel>artifacts</SectionLabel>
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 0.875 }}>
+            <Typography
+              sx={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '1.75rem',
+                color: 'var(--accent)',
+                lineHeight: 1,
+                letterSpacing: '-0.02em',
+                fontWeight: 500,
+              }}
+            >
+              {count}
+            </Typography>
+            <Typography
+              sx={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.66rem',
+                color: 'var(--text-faint)',
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+              }}
+            >
+              {count === 1 ? 'item' : 'items'}
+            </Typography>
+          </Box>
+          {buckets.length > 0 && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.375 }}>
+              {buckets.slice(0, 6).map((bucket) => (
+                <Box
+                  key={bucket.bucket}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0.75,
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '0.7rem',
+                  }}
+                >
+                  <Box
+                    sx={{
+                      width: 22,
+                      textAlign: 'right',
+                      color:
+                        bucket.bucket === 'errors' ? 'var(--error)' : 'var(--accent-strong)',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {bucket.count}
+                  </Box>
+                  <Box
+                    sx={{
+                      color:
+                        bucket.bucket === 'errors' ? 'var(--error)' : 'var(--text)',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {bucket.bucket}
+                  </Box>
+                  {bucket.names.length > 0 && (
+                    <Box
+                      sx={{
+                        color: 'var(--text-faint)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        minWidth: 0,
+                        flex: 1,
+                      }}
+                    >
+                      · {bucket.names.join(', ')}
+                    </Box>
+                  )}
+                </Box>
+              ))}
+            </Box>
+          )}
+        </Box>
       </Box>
     </Box>
   );

@@ -106,16 +106,21 @@ export default function ChatInput({
               lineHeight: 1.55,
               p: 0,
               mt: '4px',
-              '& textarea': { resize: 'none' },
+              '& textarea': {
+                resize: 'none',
+                caretColor: isEmpty ? 'transparent' : 'var(--accent)',
+              },
             }}
           />
-          {/* Custom placeholder with blinking caret */}
+          {/* Custom placeholder with blinking caret (caret is absolutely
+              positioned so its size never reflows the text) */}
           {isEmpty && (
             <Box
               sx={{
                 position: 'absolute',
                 top: '4px',
                 left: 0,
+                right: 0,
                 pointerEvents: 'none',
                 fontFamily: 'var(--font-sans)',
                 fontSize: '0.92rem',
@@ -123,15 +128,51 @@ export default function ChatInput({
                 color: 'var(--text-faint)',
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                maxWidth: '100%',
               }}
             >
-              {placeholder ??
-                (disabled
-                  ? 'connecting to agent…'
-                  : 'ask anything · e.g. train PPO on CartPole-v1 for 1000 timesteps')}
-              {!disabled && <span className="rli-caret">▍</span>}
+              {!disabled && focused && (
+                <Box
+                  component="span"
+                  className="rli-caret"
+                  sx={{
+                    position: 'absolute',
+                    left: 0,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                  }}
+                />
+              )}
+              <Box
+                component="span"
+                sx={{
+                  display: 'inline-block',
+                  position: 'relative',
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  verticalAlign: 'top',
+                  pl: !disabled && focused ? 'calc(0.75em + 6px)' : 0,
+                }}
+              >
+                {placeholder ??
+                  (disabled
+                    ? 'connecting to agent…'
+                    : 'ask anything · e.g. train PPO on CartPole-v1 for 1000 timesteps')}
+                {!disabled && !focused && (
+                  <Box
+                    component="span"
+                    className="rli-caret"
+                    sx={{
+                      position: 'absolute',
+                      left: '100%',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      ml: '2px',
+                    }}
+                  />
+                )}
+              </Box>
             </Box>
           )}
         </Box>

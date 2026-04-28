@@ -120,41 +120,57 @@ export default function AppLayout() {
             </IconButton>
           </Tooltip>
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, flex: 1 }}>
-            <BrandMark size={18} />
-            <Typography
-              sx={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '0.78rem',
-                fontWeight: 600,
-                color: 'var(--text)',
-                letterSpacing: '-0.01em',
-              }}
-            >
-              rl-intern
-            </Typography>
-            {activeSession && (
-              <>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, minWidth: 0, flex: 1 }}>
+            {activeSession ? (
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: 1.25,
+                  minWidth: 0,
+                  flex: 1,
+                }}
+              >
                 <Typography
                   sx={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '0.78rem',
-                    color: 'var(--text-faint)',
+                    fontFamily: 'var(--font-sans)',
+                    fontSize: '0.86rem',
+                    fontWeight: 600,
+                    color: 'var(--text)',
+                    letterSpacing: '-0.012em',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    minWidth: 0,
                   }}
                 >
-                  /
+                  {activeSession.title}
                 </Typography>
                 <Typography
                   sx={{
                     fontFamily: 'var(--font-mono)',
-                    fontSize: '0.78rem',
-                    color: 'var(--text-muted)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
+                    fontSize: '0.68rem',
+                    color: 'var(--text-faint)',
+                    letterSpacing: '0.02em',
+                    flexShrink: 0,
                   }}
                 >
                   {activeSession.id}
+                </Typography>
+              </Box>
+            ) : (
+              <>
+                <BrandMark size={18} />
+                <Typography
+                  sx={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                    color: 'var(--text)',
+                    letterSpacing: '-0.01em',
+                  }}
+                >
+                  rl-intern
                 </Typography>
               </>
             )}

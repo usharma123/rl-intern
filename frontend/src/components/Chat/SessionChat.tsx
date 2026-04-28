@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Box, Button, Typography } from '@mui/material';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
 import CancelOutlinedIcon from '@mui/icons-material/CancelOutlined';
@@ -7,7 +7,7 @@ import { useAgentChat } from '@/hooks/useAgentChat';
 import { useSessionStore } from '@/store/sessionStore';
 import MessageList from './MessageList';
 import ChatInput from './ChatInput';
-import RunDashboard from './RunDashboard';
+import RunDashboard, { hasRunDashboardContent } from './RunDashboard';
 import StatusChip, { type StatusTone } from '@/components/Common/StatusChip';
 
 const SUGGESTIONS = [
@@ -69,6 +69,11 @@ export default function SessionChat({ sessionId, isActive }: Props) {
   } = useAgentChat(sessionId);
   const { updateSessionTitle, setNeedsAttention, sessions } = useSessionStore();
   const session = sessions.find((s) => s.id === sessionId);
+  const [runPanelOpen, setRunPanelOpen] = useState(true);
+  const showRunPanel =
+    runPanelOpen && hasRunDashboardContent(plan, jobs, artifacts);
+  // 320 panel + 16 right gap + 16 left breathing room = 352
+  const panelOffset = showRunPanel ? 352 : 0;
 
   // Auto-title from first user message
   useEffect(() => {
@@ -218,7 +223,15 @@ export default function SessionChat({ sessionId, isActive }: Props) {
     connection !== 'open' || !bridgeOpen || !agentReady;
 
   return (
-    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <Box
+      sx={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        position: 'relative',
+      }}
+    >
       {/* Status bar pinned above the message list */}
       <Box
         sx={{
@@ -246,11 +259,26 @@ export default function SessionChat({ sessionId, isActive }: Props) {
 
       {showConnectingRail && <ConnectingRail tone={chip.tone} label={chip.label} />}
 
-      <RunDashboard plan={plan} jobs={jobs} artifacts={artifacts} />
+      <RunDashboard
+        plan={plan}
+        jobs={jobs}
+        artifacts={artifacts}
+        open={runPanelOpen}
+        onOpenChange={setRunPanelOpen}
+      />
 
-      <MessageList messages={messages} />
-
-      {approval && (
+      <Box
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          pr: { xs: 0, sm: `${panelOffset}px` },
+          transition: 'padding-right 220ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+        }}
+      >
+        <MessageList messages={messages} />
+        {approval && (
         <Box
           sx={{
             mx: 'auto',
@@ -312,14 +340,15 @@ export default function SessionChat({ sessionId, isActive }: Props) {
             reject
           </Button>
         </Box>
-      )}
+        )}
 
-      <ChatInput
-        disabled={disabled}
-        isStreaming={isStreaming}
-        onSend={sendMessage}
-        onInterrupt={interrupt}
-      />
+        <ChatInput
+          disabled={disabled}
+          isStreaming={isStreaming}
+          onSend={sendMessage}
+          onInterrupt={interrupt}
+        />
+      </Box>
     </Box>
   );
 }
