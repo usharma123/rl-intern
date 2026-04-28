@@ -30,10 +30,27 @@ def _validate_tool_args(tool_args: dict[str, Any]) -> tuple[bool, str | None]:
     return True, None
 
 
-def _needs_approval(tool_name: str, config: Config | None = None) -> bool:
+def _needs_approval(
+    tool_name: str,
+    config: Config | None = None,
+    args: dict[str, Any] | None = None,
+) -> bool:
     if config and config.yolo_mode:
         return False
-    return tool_name in {"train_sb3", "launch_modal_experiment"}
+    args = args or {}
+    if tool_name == "run_experiment_stage":
+        return args.get("stage") in {"train", "publish_optional"}
+    return tool_name in {
+        "train_sb3",
+        "launch_modal_experiment",
+        "modal_job_run",
+        "modal_job_cancel",
+        "modal_sandbox_create",
+        "modal_sandbox_exec",
+        "modal_sandbox_write",
+        "modal_sandbox_edit",
+        "modal_sandbox_terminate",
+    }
 
 
 def _runner_user_text(session: Session, text: str) -> str:
@@ -59,6 +76,12 @@ def _friendly_error_message(error: Exception) -> str | None:
     if "rate limit" in err_str or "429" in err_str:
         return "The model provider rate limited this request. Retry later or switch models."
     return None
+
+
+def _display_tool_name(tool_name: str, args: dict[str, Any]) -> str:
+    if tool_name == "run_experiment_stage" and args.get("stage"):
+        return f"stage:{args['stage']}"
+    return tool_name
 
 
 async def _compact_and_notify(session: Session) -> None:
@@ -316,10 +339,14 @@ class Handlers:
                     good_tools.append((tc, tc.function.name, args))
 
                 approval_required = [
-                    item for item in good_tools if _needs_approval(item[1], session.config)
+                    item
+                    for item in good_tools
+                    if _needs_approval(item[1], session.config, item[2])
                 ]
                 executable = [
-                    item for item in good_tools if not _needs_approval(item[1], session.config)
+                    item
+                    for item in good_tools
+                    if not _needs_approval(item[1], session.config, item[2])
                 ]
 
                 await _execute_tools(session, executable)
@@ -450,6 +477,13 @@ async def _execute_tools(
             "launch_modal_experiment",
             "get_modal_run_status",
             "fetch_modal_artifacts",
+            "create_experiment_plan",
+            "run_experiment_stage",
+            "get_artifact_manifest",
+            "modal_job_run",
+            "modal_job_status",
+            "modal_job_logs",
+            "modal_job_artifacts",
         }:
             args = {**args, "run_dir": session.run_dir}
         prepared_tools.append((tc, name, args))
@@ -457,19 +491,34 @@ async def _execute_tools(
             await session.send_event(
                 Event(
                     event_type="tool_state_change",
-                    data={"tool_call_id": tc.id, "tool": name, "state": "running"},
+                    data={
+                        "tool_call_id": tc.id,
+                        "tool": _display_tool_name(name, args),
+                        "actual_tool": name,
+                        "state": "running",
+                    },
                 )
             )
         await session.send_event(
             Event(
                 event_type="tool_call",
-                data={"tool": name, "arguments": args, "tool_call_id": tc.id},
+                data={
+                    "tool": _display_tool_name(name, args),
+                    "actual_tool": name,
+                    "arguments": args,
+                    "tool_call_id": tc.id,
+                },
             )
         )
 
     async def run_one(tc: ToolCall, name: str, args: dict[str, Any]):
-        output, success = await session.tool_router.call_tool(name, args, session=session)
-        return tc, name, output, success
+        output, success = await session.tool_router.call_tool(
+            name,
+            args,
+            session=session,
+            tool_call_id=tc.id,
+        )
+        return tc, name, args, output, success
 
     results = await asyncio.gather(
         *[run_one(tc, name, args) for tc, name, args in prepared_tools],
@@ -480,7 +529,7 @@ async def _execute_tools(
         if isinstance(result, Exception):
             logger.exception("Tool execution failed", exc_info=result)
             continue
-        tc, name, output, success = result
+        tc, name, args, output, success = result
         session.context_manager.add_message(
             Message(role="tool", content=output, tool_call_id=tc.id, name=name)
         )
@@ -488,7 +537,8 @@ async def _execute_tools(
             Event(
                 event_type="tool_output",
                 data={
-                    "tool": name,
+                    "tool": _display_tool_name(name, args),
+                    "actual_tool": name,
                     "tool_call_id": tc.id,
                     "output": output,
                     "success": success,

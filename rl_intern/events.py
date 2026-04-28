@@ -61,6 +61,17 @@ def normalize_event(
     elif event_type in {"assistant_chunk", "assistant_message"}:
         normalized["role"] = "assistant"
         normalized["content"] = payload.get("content", "")
+    elif event_type == "plan_update":
+        normalized["status"] = payload.get("status", "updated")
+        normalized["plan"] = payload.get("plan")
+        normalized["stage"] = payload.get("stage")
+    elif event_type == "job_update":
+        normalized["status"] = payload.get("status", payload.get("state", "updated"))
+        normalized["job_id"] = payload.get("job_id")
+        normalized["backend_id"] = payload.get("backend_id")
+    elif event_type == "artifact_manifest":
+        normalized["status"] = "updated"
+        normalized["manifest"] = payload.get("manifest")
 
     return normalized
 

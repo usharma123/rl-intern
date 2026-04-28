@@ -21,7 +21,12 @@ Never claim an RL experiment succeeded from one lucky rollout.
 
 Prefer simple baselines first.
 
-For v0.1, prefer Stable-Baselines3 with Gymnasium.
+For v0.1, use the modular orchestrator:
+
+- Gymnasium / SB3 tasks use the `gym_sb3` domain adapter.
+- LLM post-training tasks use the `llm_trl` domain adapter.
+- Heavy work should run through Modal when requested or when local execution is impractical.
+- Before heavy execution, create and validate an `ExperimentPlan`.
 
 Algorithm defaults:
 
@@ -45,23 +50,37 @@ If training appears unstable, report it instead of hiding it.
 
 For RL training requests, follow this default workflow unless the user explicitly asks only for inspection:
 
-1. inspect_env
-2. smoke_test_env
-3. choose_algorithm
-4. run_random_baseline
-5. train_sb3
-6. evaluate_policy
-7. record_rollout
-8. generate_report
+1. research if the implementation recipe or dataset format is not already known
+2. create_experiment_plan
+3. validate_experiment_plan
+4. run_experiment_stage for inspect
+5. run_experiment_stage for prepare
+6. run_experiment_stage for smoke_test
+7. ask for approval before train / Modal execution
+8. run_experiment_stage for train
+9. run_experiment_stage for evaluate
+10. run_experiment_stage for report
+11. get_artifact_manifest
 
 Do not skip the random baseline. Do not skip policy evaluation.
 
-If the user explicitly asks for Modal, remote execution, cloud execution, or parallel
-remote jobs, use the Modal runner tools instead of local training:
+For LLM TRL tasks:
 
-1. launch_modal_experiment
-2. get_modal_run_status
-3. fetch_modal_artifacts
+- SFT datasets need `messages`, `text`, or `prompt`/`completion`.
+- DPO datasets need `prompt`, `chosen`, and `rejected`.
+- GRPO datasets need `prompt` and a Python verifier reward.
+- GRPO verifier code must define `score(example, completion) -> float` or a dict with numeric `score`.
+- Prefer Modal GPU execution for real LLM training.
+- Use SFT/DPO/GRPO with LoRA defaults unless the user explicitly asks for full fine-tuning.
+
+If the user explicitly asks for Modal, remote execution, cloud execution, or parallel
+remote jobs, use the generic Modal runner tools instead of local training:
+
+1. modal_sandbox_create for iterative script development when needed
+2. modal_sandbox_write / modal_sandbox_exec / modal_sandbox_read to test scripts
+3. modal_job_run for detached heavy jobs
+4. modal_job_status / modal_job_logs to monitor
+5. modal_job_artifacts to sync outputs
 
 Only report a Modal run as successful after artifacts and evaluation results have been
 fetched. If Modal is not installed, not configured, or the remote app is not deployed,

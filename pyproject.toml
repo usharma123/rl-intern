@@ -21,6 +21,8 @@ dependencies = [
     "imageio",
     "moviepy",
     "tensorboard",
+    "httpx",
+    "huggingface-hub",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +39,14 @@ server = [
 ]
 modal = [
     "modal",
+]
+llm = [
+    "transformers",
+    "trl",
+    "datasets",
+    "accelerate",
+    "peft",
+    "bitsandbytes",
 ]
 
 [project.scripts]
