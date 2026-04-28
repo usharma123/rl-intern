@@ -114,3 +114,47 @@ def test_session_restores_context_from_jsonl(tmp_path):
     assert messages[3].tool_call_id == "call_1"
     assert messages[4].tool_calls[0].function.name == "get_artifact_manifest"
     assert messages[5].tool_call_id == "call_2"
+
+
+def test_session_restore_truncates_large_tool_outputs(tmp_path):
+    store = RunStore(tmp_path / "runs")
+    store.create_run(run_id="run_restore")
+    store.append_event(
+        "run_restore",
+        normalize_event("user_input", {"text": "continue"}, run_id="run_restore", turn_id="turn_001"),
+    )
+    store.append_event(
+        "run_restore",
+        normalize_event(
+            "tool_call",
+            {
+                "tool": "get_artifact_manifest",
+                "actual_tool": "get_artifact_manifest",
+                "tool_call_id": "call_big",
+                "arguments": {"run_dir": "x"},
+            },
+            run_id="run_restore",
+            turn_id="turn_001",
+        ),
+    )
+    store.append_event(
+        "run_restore",
+        normalize_event(
+            "tool_output",
+            {
+                "tool": "get_artifact_manifest",
+                "actual_tool": "get_artifact_manifest",
+                "tool_call_id": "call_big",
+                "output": "x" * 50_000,
+                "success": True,
+            },
+            run_id="run_restore",
+            turn_id="turn_001",
+        ),
+    )
+
+    session = Session(asyncio.Queue(), run_id="run_restore", run_store=store)
+    tool_message = session.context_manager.items[-1]
+
+    assert len(tool_message.content) < 25_000
+    assert "restored tool output truncated" in tool_message.content

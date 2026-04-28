@@ -16,6 +16,8 @@ from rl_intern.run_store import RunStore
 
 logger = logging.getLogger(__name__)
 
+_RESTORED_TOOL_OUTPUT_LIMIT = 20_000
+
 
 _MAX_TOKENS_MAP: dict[str, int] = {
     "anthropic/claude-opus-4-6": 200_000,
@@ -224,13 +226,16 @@ class Session:
                 flush_assistant_with_tools()
                 data = event.get("data") or {}
                 output = data.get("output", event.get("output", event.get("content", "")))
+                if not isinstance(output, str):
+                    output = json.dumps(output, sort_keys=True)
+                output = _truncate_restored_tool_output(output)
                 tool_name = str(data.get("actual_tool") or data.get("tool") or event.get("tool") or "")
                 tool_call_id = str(event.get("tool_call_id") or data.get("tool_call_id") or "")
                 if tool_call_id:
                     self.context_manager.add_message(
                         Message(
                             role="tool",
-                            content=output if isinstance(output, str) else json.dumps(output, sort_keys=True),
+                            content=output,
                             tool_call_id=tool_call_id,
                             name=tool_name,
                         )
@@ -248,3 +253,14 @@ class Session:
             flush_assistant_with_tools()
         else:
             flush_plain_assistant()
+
+
+def _truncate_restored_tool_output(output: str) -> str:
+    if len(output) <= _RESTORED_TOOL_OUTPUT_LIMIT:
+        return output
+    omitted = len(output) - _RESTORED_TOOL_OUTPUT_LIMIT
+    return (
+        output[: _RESTORED_TOOL_OUTPUT_LIMIT // 2]
+        + f"\n\n[rl-intern: restored tool output truncated, omitted {omitted} chars]\n\n"
+        + output[-_RESTORED_TOOL_OUTPUT_LIMIT // 2 :]
+    )
