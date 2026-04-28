@@ -5,6 +5,8 @@ import json
 import os
 import shlex
 import subprocess
+import sys
+import threading
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -17,7 +19,15 @@ except Exception:  # pragma: no cover - optional dependency
 
 APP_NAME = "rl-intern-generic"
 FUNCTION_NAME = "run_job"
+GPU_T4_FUNCTION_NAME = "run_job_gpu_t4"
 VOLUME_NAME = "rl-intern-runs"
+
+
+def function_name_for_hardware(hardware: str | None) -> str:
+    normalized = str(hardware or "").strip().lower().replace("_", "-")
+    if normalized in {"gpu-t4", "t4"}:
+        return GPU_T4_FUNCTION_NAME
+    return FUNCTION_NAME
 
 
 def _build_app():
@@ -86,10 +96,10 @@ def _run_job_locally(request: dict[str, Any]) -> dict[str, Any]:
         if script:
             script_path = run_dir / "job_script.py"
             script_path.write_text(script, encoding="utf-8")
-            main_cmd = ["python", str(script_path), *(request.get("script_args") or [])]
+            main_cmd = ["python", "-u", str(script_path), *(request.get("script_args") or [])]
         else:
             if isinstance(command, list):
-                main_cmd = [str(part) for part in command]
+                main_cmd = _python_unbuffered([str(part) for part in command])
             else:
                 main_cmd = str(command)
                 use_shell = True
@@ -98,20 +108,18 @@ def _run_job_locally(request: dict[str, Any]) -> dict[str, Any]:
             "w", encoding="utf-8"
         ) as stderr:
             if deps:
-                pip_proc = subprocess.run(
+                pip_returncode = _run_process_with_tee(
                     ["python", "-m", "pip", "install", *[str(dep) for dep in deps]],
-                    shell=False,
                     cwd=run_dir,
                     env=env,
                     stdout=stdout,
                     stderr=stderr,
-                    text=True,
                     timeout=_timeout_seconds(request.get("timeout", "30m")),
                 )
-                if pip_proc.returncode != 0:
+                if pip_returncode != 0:
                     result = {
                         "status": "failed",
-                        "returncode": pip_proc.returncode,
+                        "returncode": pip_returncode,
                         "stdout": stdout_path.read_text(encoding="utf-8", errors="replace")[-20_000:],
                         "stderr": stderr_path.read_text(encoding="utf-8", errors="replace")[-20_000:],
                         "command": ["python", "-m", "pip", "install", *deps],
@@ -119,20 +127,19 @@ def _run_job_locally(request: dict[str, Any]) -> dict[str, Any]:
                     _write_status(run_dir, result)
                     result["artifacts"] = _collect_artifacts(run_dir)
                     return result
-            proc = subprocess.run(
+            returncode = _run_process_with_tee(
                 main_cmd,
-                shell=use_shell,
                 cwd=run_dir,
                 env=env,
                 stdout=stdout,
                 stderr=stderr,
-                text=True,
                 timeout=_timeout_seconds(request.get("timeout", "30m")),
+                shell=use_shell,
             )
-        status = "succeeded" if proc.returncode == 0 else "failed"
+        status = "succeeded" if returncode == 0 else "failed"
         result = {
             "status": status,
-            "returncode": proc.returncode,
+            "returncode": returncode,
             "stdout": stdout_path.read_text(encoding="utf-8", errors="replace")[-20_000:],
             "stderr": stderr_path.read_text(encoding="utf-8", errors="replace")[-20_000:],
             "command": main_cmd if isinstance(main_cmd, list) else shlex.split(main_cmd),
@@ -155,6 +162,67 @@ def _timeout_seconds(value: str | int | float) -> int:
     return int(float(text))
 
 
+def _python_unbuffered(command: list[str]) -> list[str]:
+    if not command:
+        return command
+    executable = Path(command[0]).name
+    if not executable.startswith("python"):
+        return command
+    if "-u" in command[1:]:
+        return command
+    return [command[0], "-u", *command[1:]]
+
+
+def _run_process_with_tee(
+    command: list[str] | str,
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    stdout,
+    stderr,
+    timeout: int,
+    shell: bool = False,
+) -> int:
+    print(f"[rl-intern] running command: {command}", flush=True)
+    proc = subprocess.Popen(
+        command,
+        shell=shell,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+
+    def pump(src, file_target, console_target) -> None:
+        try:
+            for line in iter(src.readline, ""):
+                file_target.write(line)
+                file_target.flush()
+                console_target.write(line)
+                console_target.flush()
+        finally:
+            src.close()
+
+    stdout_thread = threading.Thread(target=pump, args=(proc.stdout, stdout, sys.stdout), daemon=True)
+    stderr_thread = threading.Thread(target=pump, args=(proc.stderr, stderr, sys.stderr), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    try:
+        returncode = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        returncode = proc.wait()
+        stderr.write(f"\n[rl-intern] command timed out after {timeout}s\n")
+        stderr.flush()
+        print(f"[rl-intern] command timed out after {timeout}s", file=sys.stderr, flush=True)
+    stdout_thread.join(timeout=5)
+    stderr_thread.join(timeout=5)
+    print(f"[rl-intern] command exited with code {returncode}", flush=True)
+    return returncode
+
+
 if modal is not None and app is not None and _image is not None and _volume is not None:
 
     @app.function(image=_image, volumes={"/runs": _volume}, timeout=60 * 60 * 24)
@@ -163,5 +231,12 @@ if modal is not None and app is not None and _image is not None and _volume is n
         _volume.commit()
         return result
 
+    @app.function(image=_image, volumes={"/runs": _volume}, gpu="T4", timeout=60 * 60 * 24)
+    def run_job_gpu_t4(request: dict[str, Any]) -> dict[str, Any]:
+        result = _run_job_locally(request)
+        _volume.commit()
+        return result
+
 else:
     run_job = None
+    run_job_gpu_t4 = None
