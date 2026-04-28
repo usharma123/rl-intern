@@ -1,0 +1,111 @@
+# RL Experiment Report
+
+## Summary
+
+- Environment: {{ env_result.get("env_id", "unknown") }}
+- Algorithm: {{ training_result.get("algorithm", evaluation_result.get("algorithm", "unknown")) }}
+- Random baseline mean reward: {{ random_baseline_result.get("mean_reward", "n/a") }}
+- Evaluation mean reward: {{ evaluation_result.get("mean_reward", "n/a") }}
+- Model path: {{ training_result.get("model_path", "n/a") }}
+- Report generated locally by `rl-intern`.
+
+## Environment
+
+- Observation space: {{ env_result.get("observation_space", "n/a") }}
+- Observation space type: {{ env_result.get("observation_space_type", "n/a") }}
+- Action space: {{ env_result.get("action_space", "n/a") }}
+- Action space type: {{ env_result.get("action_space_type", "n/a") }}
+- Max episode steps: {{ env_result.get("max_episode_steps", "n/a") }}
+- Reward range: {{ env_result.get("reward_range", "n/a") }}
+- Render modes: {{ env_result.get("render_modes", []) }}
+
+{% if env_result.get("warnings") %}
+Warnings:
+{% for warning in env_result.get("warnings", []) %}
+- {{ warning }}
+{% endfor %}
+{% endif %}
+
+## Smoke Test
+
+- Passed: {{ smoke_test_result.get("passed", false) }}
+- Episodes: {{ smoke_test_result.get("episodes", "n/a") }}
+- Total steps: {{ smoke_test_result.get("steps_total", "n/a") }}
+
+{% if smoke_test_result.get("errors") %}
+Errors:
+{% for error in smoke_test_result.get("errors", []) %}
+- {{ error }}
+{% endfor %}
+{% endif %}
+
+{% if smoke_test_result.get("warnings") %}
+Warnings:
+{% for warning in smoke_test_result.get("warnings", []) %}
+- {{ warning }}
+{% endfor %}
+{% endif %}
+
+## Algorithm Choice
+
+- Selected algorithm: {{ training_result.get("algorithm", "n/a") }}
+
+## Random Baseline
+
+- Episodes: {{ random_baseline_result.get("episodes", "n/a") }}
+- Mean reward: {{ random_baseline_result.get("mean_reward", "n/a") }}
+- Std reward: {{ random_baseline_result.get("std_reward", "n/a") }}
+- Min reward: {{ random_baseline_result.get("min_reward", "n/a") }}
+- Max reward: {{ random_baseline_result.get("max_reward", "n/a") }}
+- Seed: {{ random_baseline_result.get("seed", "n/a") }}
+
+## Training Configuration
+
+- Total timesteps: {{ training_result.get("total_timesteps", "n/a") }}
+- Seed: {{ training_result.get("seed", "n/a") }}
+- Model path: {{ training_result.get("model_path", "n/a") }}
+- Config path: {{ training_result.get("config_path", "n/a") }}
+- Log dir: {{ training_result.get("log_dir", "n/a") }}
+
+{% if training_result.get("error") %}
+Training error: {{ training_result.get("error") }}
+{% endif %}
+
+## Evaluation Results
+
+- Episodes: {{ evaluation_result.get("episodes", "n/a") }}
+- Mean reward: {{ evaluation_result.get("mean_reward", "n/a") }}
+- Std reward: {{ evaluation_result.get("std_reward", "n/a") }}
+- Min reward: {{ evaluation_result.get("min_reward", "n/a") }}
+- Max reward: {{ evaluation_result.get("max_reward", "n/a") }}
+- Seed: {{ evaluation_result.get("seed", "n/a") }}
+- Results path: {{ evaluation_result.get("results_path", "n/a") }}
+
+{% if evaluation_result.get("error") %}
+Evaluation error: {{ evaluation_result.get("error") }}
+{% endif %}
+
+## Rollout
+
+{% if rollout_result %}
+- Video path: {{ rollout_result.get("video_path", "n/a") }}
+- Episode reward: {{ rollout_result.get("episode_reward", "n/a") }}
+- Steps: {{ rollout_result.get("steps", "n/a") }}
+{% if rollout_result.get("error") %}
+- Error: {{ rollout_result.get("error") }}
+{% endif %}
+{% else %}
+No rollout was recorded.
+{% endif %}
+
+## Reproduction Command
+
+```bash
+rl-intern "train {{ training_result.get("algorithm", "PPO") }} on {{ training_result.get("env_id", env_result.get("env_id", "CartPole-v1")) }} for {{ training_result.get("total_timesteps", 100000) }} timesteps, evaluate it, record a rollout, and generate a report"
+```
+
+## Notes and Failure Modes
+
+- Random baseline is included so improvement is not inferred from training alone.
+- Evaluation aggregates multiple episodes; do not treat one rollout as proof of success.
+- Any warnings or errors above should be investigated before relying on the trained policy.
