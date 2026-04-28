@@ -48,6 +48,10 @@ export function applyEvent(state: AppState, event: RpcEvent): AppState {
   } else if (event.type === "approval_required") {
     const tools = event.data?.tools
     state.pendingApprovals = Array.isArray(tools) ? tools as Array<Record<string, unknown>> : []
+  } else if (event.type === "error") {
+    const message = String(event.data?.error ?? event.data?.message ?? "Unknown backend error")
+    state.transcript.push(`\nError: ${message}\n`)
+    state.toolEvents.push(`ERROR: ${message}`)
   } else if (event.type === "turn_complete") {
     state.currentTool = undefined
   }

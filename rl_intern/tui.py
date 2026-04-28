@@ -26,4 +26,6 @@ def main() -> None:
 
     env = os.environ.copy()
     env["RL_INTERN_PROJECT_ROOT"] = str(project_root)
-    raise SystemExit(subprocess.call([bun, "run", "start"], cwd=tui_dir, env=env))
+    raise SystemExit(
+        subprocess.call([bun, "run", "start", "--", *sys.argv[1:]], cwd=tui_dir, env=env)
+    )

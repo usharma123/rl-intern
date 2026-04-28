@@ -23,6 +23,27 @@ function appendPromptText(text: string) {
   render()
 }
 
+function isSubmitKey(event: { name?: string; sequence?: string }) {
+  return (
+    event.name === "return" ||
+    event.name === "enter" ||
+    event.name === "linefeed" ||
+    event.sequence === "\r" ||
+    event.sequence === "\n" ||
+    event.sequence === "\r\n"
+  )
+}
+
+function submitPrompt() {
+  const value = prompt.trim()
+  if (value) {
+    state.toolEvents.push(`Submitted: ${value}`)
+    backend.submit(value)
+  }
+  prompt = ""
+  render()
+}
+
 function render() {
   try {
     renderer.root.remove("app")
@@ -79,11 +100,8 @@ renderer.keyInput.on("keypress", (event) => {
     backend.shutdown()
     process.exit(0)
   }
-  if (event.name === "return" || event.name === "enter") {
-    const value = prompt.trim()
-    if (value) backend.submit(value)
-    prompt = ""
-    render()
+  if (isSubmitKey(event)) {
+    submitPrompt()
     return
   }
   if (event.name === "backspace") {
