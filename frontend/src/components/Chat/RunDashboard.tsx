@@ -34,6 +34,13 @@ function tone(status?: string): StatusTone {
   return 'ok';
 }
 
+function verdictTone(verdict?: string): StatusTone {
+  const v = (verdict ?? '').toLowerCase();
+  if (v === 'regressed') return 'err';
+  if (v === 'inconclusive' || v === 'smoke_only') return 'warn';
+  return 'ok';
+}
+
 const ARTIFACT_BUCKETS = [
   'checkpoints',
   'adapters',
@@ -75,6 +82,28 @@ function artifactBuckets(manifest?: Record<string, unknown>) {
   }).filter(Boolean) as Array<{ bucket: string; count: number; names: string[] }>;
 }
 
+function evidenceSummary(manifest?: Record<string, unknown>) {
+  if (!manifest) return null;
+  const metrics = manifest.metrics;
+  if (!Array.isArray(metrics)) return null;
+  const summaries = metrics
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const objectItem = item as { name?: unknown; kind?: unknown; path?: unknown; metadata?: unknown };
+      const metadata = objectItem.metadata;
+      if (!metadata || typeof metadata !== 'object') return null;
+      const meta = metadata as { verdict?: unknown; run_class?: unknown; reason?: unknown };
+      if (!meta.verdict && !meta.run_class) return null;
+      return {
+        name: String(objectItem.name ?? objectItem.kind ?? objectItem.path ?? 'evaluation'),
+        verdict: String(meta.run_class === 'smoke_only' ? 'smoke_only' : meta.verdict ?? 'inconclusive'),
+        reason: meta.reason ? String(meta.reason) : '',
+      };
+    })
+    .filter(Boolean) as Array<{ name: string; verdict: string; reason: string }>;
+  return summaries.length ? summaries[summaries.length - 1] : null;
+}
+
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <Typography
@@ -101,6 +130,7 @@ export default function RunDashboard({ plan, jobs, artifacts, open, onOpenChange
   const stage = plan.stage ?? 'no active stage';
   const status = plan.status ?? 'updated';
   const buckets = artifactBuckets(artifacts.manifest);
+  const evidence = evidenceSummary(artifacts.manifest);
 
   // Collapsed: small floating tab to reopen
   if (!open) {
@@ -282,6 +312,45 @@ export default function RunDashboard({ plan, jobs, artifacts, open, onOpenChange
         </Box>
 
         <Box sx={{ height: '1px', flexShrink: 0, background: 'var(--border)' }} />
+
+        {/* EVIDENCE */}
+        {evidence && (
+          <>
+            <Box>
+              <SectionLabel>evidence</SectionLabel>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.875, mb: 0.75 }}>
+                <StatusChip label={evidence.verdict.toUpperCase()} tone={verdictTone(evidence.verdict)} />
+                <Typography
+                  sx={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '0.7rem',
+                    color: 'var(--text-muted)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    minWidth: 0,
+                  }}
+                >
+                  {evidence.name}
+                </Typography>
+              </Box>
+              {evidence.reason && (
+                <Typography
+                  sx={{
+                    fontSize: '0.74rem',
+                    color: 'var(--text-muted)',
+                    lineHeight: 1.4,
+                    letterSpacing: 0,
+                  }}
+                >
+                  {evidence.reason}
+                </Typography>
+              )}
+            </Box>
+
+            <Box sx={{ height: '1px', flexShrink: 0, background: 'var(--border)' }} />
+          </>
+        )}
 
         {/* JOBS */}
         <Box>
