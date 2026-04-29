@@ -186,7 +186,10 @@ def cli() -> None:
     logging.basicConfig(level=logging.WARNING)
     parser = argparse.ArgumentParser(
         prog="rl-intern",
-        description="RL Intern: an autonomous reinforcement learning engineer in your terminal.",
+        description=(
+            "Deprecated prompt CLI for RL Intern. Use the web app with "
+            "`cd frontend && bun run dev`."
+        ),
     )
     parser.add_argument("prompt", nargs="?", default=None, help="Run one prompt headlessly.")
     parser.add_argument("--model", "-m", default=None, help="LiteLLM model name.")
@@ -201,6 +204,11 @@ def cli() -> None:
     args = parser.parse_args()
 
     try:
+        print(
+            "Warning: `rl-intern` is deprecated for normal use. "
+            "Use `cd frontend && bun run dev`.",
+            file=sys.stderr,
+        )
         if args.prompt:
             asyncio.run(
                 _run_agent_prompt(

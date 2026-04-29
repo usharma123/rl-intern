@@ -2,104 +2,55 @@
 
 The agent that trains agents.
 
-`rl-intern` is an autonomous reinforcement learning engineer in your terminal. It inspects Gymnasium environments, runs random baselines, chooses compatible algorithms, trains Stable-Baselines3 agents, evaluates policies, records rollout videos, and generates reproducible experiment reports.
+`rl-intern` is a local web app for launching reinforcement learning runs. The
+frontend talks to a local FastAPI run server, which owns agent execution,
+approvals, Modal jobs, artifacts, reports, and session logs.
 
-## Install
+## Quick Start
 
 ```bash
 git clone <repo>
-cd rl-intern
-uv sync
-uv tool install -e .
-```
-
-## Usage
-
-```bash
-rl-intern
-rl-intern "train PPO on CartPole-v1 and give me a report"
-rl-intern "compare DQN and PPO on LunarLander-v3"
-rl-intern "inspect this custom Gymnasium env and tell me if it is trainable"
-```
-
-Use OpenRouter through LiteLLM:
-
-```bash
-export OPENROUTER_API_KEY="..."
-rl-intern --model openrouter/openai/gpt-oss-120b:free "inspect CartPole-v1"
-```
-
-## Optional Modal Runner
-
-Local execution is the default. Modal is an optional remote runner for trusted
-Gymnasium/Stable-Baselines3 jobs.
-
-```bash
-uv sync --extra modal
-modal setup
-uv run modal deploy rl_intern/modal_jobs/sb3.py
-uv run rl-intern --runner modal --model openrouter/openai/gpt-oss-120b:free \
-  "train PPO on CartPole-v1 for 10000 timesteps, evaluate it for 20 episodes, record a rollout, and generate a report"
-```
-
-Modal is not used for arbitrary custom code in this version. Generated
-environments, reward functions, and paper reproduction scripts should still run
-locally until sandbox support is added.
-
-## Web Frontend
-
-A web frontend lives in `frontend/` (Vite + React + MUI, mirroring
-[`huggingface/ml-intern`](https://github.com/huggingface/ml-intern)). It talks
-to the run server over a single WebSocket that bridges to the existing
-`rl_intern.rpc` JSON-line protocol — Python remains the only place RL tools,
-approvals, training, and artifacts run.
-
-```bash
-# 1. start the run server (FastAPI on 127.0.0.1:8765)
-uv sync --extra server
-rl-intern-server --host 127.0.0.1 --port 8765
-
-# 2. start the dev frontend in another shell
-cd frontend
+cd rl-intern/frontend
 bun install
+bun run setup
 bun run dev
 ```
 
 Then open http://localhost:5173.
 
-For a single command that starts the run server when it is not already running,
-use `bun run dev:full` from `frontend/`.
-
-## Run Server and Viewer
-
-Every run writes a canonical session log:
-
-```text
-artifacts/runs/<run_id>/session.jsonl
-```
-
-Run the local-only server:
+Daily development is just:
 
 ```bash
-uv sync --extra server
-rl-intern-server --host 127.0.0.1 --port 8765
+cd frontend
+bun run dev
 ```
 
-Endpoints:
+`bun run dev` starts the local run server on `127.0.0.1:8765` when it is not
+already running, then starts the Vite frontend.
 
-```text
-GET  /runs
-GET  /runs/<run_id>
-GET  /runs/<run_id>/events.jsonl
-GET  /runs/<run_id>/artifacts
-GET  /runs/<run_id>/report.md
-GET  /runs/<run_id>/viewer
+## Setup
+
+Run setup once per machine:
+
+```bash
+cd frontend
+bun run setup
 ```
 
-The viewer page links the JSONL session log for Euphony. Euphony is optional:
-open https://openai.github.io/euphony/ and load
-`artifacts/runs/<run_id>/session.jsonl`, or use the local
-`/runs/<run_id>/events.jsonl` URL when your browser allows localhost loading.
+The setup script:
+
+- syncs Python dependencies with `uv`
+- writes missing secrets to the repo-root `.env`
+- configures `OPENROUTER_API_KEY`
+- configures `HF_TOKEN` and `HUGGINGFACE_HUB_TOKEN`
+- authenticates Modal when needed
+- deploys the Modal backend apps
+
+Existing `.env` values are preserved. To re-enter values, run:
+
+```bash
+bun run setup -- --force
+```
 
 ## What It Does
 
@@ -110,48 +61,54 @@ open https://openai.github.io/euphony/ and load
 - Evaluates policies across episodes
 - Records rollout videos
 - Generates Markdown experiment reports
-- Optionally launches trusted SB3 jobs on Modal
+- Launches trusted jobs on Modal
 
-## v0.1 Supported Algorithms
+## Internal Commands
 
-- PPO
-- DQN
-
-## v0.1 Supported Environment API
-
-- Gymnasium
-
-## First Demo
+Most users should use the frontend scripts above. These commands are kept for
+debugging and tests:
 
 ```bash
-rl-intern "train PPO on CartPole-v1 for 10000 timesteps, evaluate it for 20 episodes, record a rollout, and generate a report"
+uv run rl-intern-server --host 127.0.0.1 --port 8765
+uv run modal deploy rl_intern/modal_jobs/generic.py
+uv run modal deploy rl_intern/modal_jobs/sb3.py
 ```
 
-Expected artifacts:
+The old prompt CLI is deprecated for normal use:
+
+```bash
+uv run rl-intern "inspect CartPole-v1"
+```
+
+## Run Artifacts
+
+Each run writes local artifacts under:
 
 ```text
-artifacts/runs/<run_id>/model.zip
-artifacts/runs/<run_id>/config.json
-artifacts/runs/<run_id>/eval.json
-artifacts/runs/<run_id>/rollout.mp4
-artifacts/runs/<run_id>/report.md
-artifacts/runs/<run_id>/session.jsonl
+artifacts/runs/<run_id>/
 ```
 
-## Guardrails
+Common outputs include:
 
-- Do not claim success without evaluation.
-- Do not hide failed training runs.
-- Do not assume reward curves are stable from one seed.
-- Do not require cloud credentials for core functionality.
-- Do not add web UI or distributed training in v0.1.
+```text
+model.zip
+config.json
+eval.json
+rollout.mp4
+report.md
+session.jsonl
+```
 
-## Roadmap
+The run server also exposes:
 
-- CleanRL script generation
-- W&B sweeps and training curve plots
-- PettingZoo multi-agent support
-- Minari offline RL support
-- RLlib distributed training
-- TRL post-training workflows
-- Hugging Face Hub publishing
+```text
+GET  /api/health
+GET  /api/setup/status
+POST /api/session
+GET  /runs
+GET  /runs/<run_id>
+GET  /runs/<run_id>/events.jsonl
+GET  /runs/<run_id>/artifacts
+GET  /runs/<run_id>/report.md
+GET  /runs/<run_id>/viewer
+```

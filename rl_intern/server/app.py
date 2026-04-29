@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from rl_intern.run_store import RunStore
+from rl_intern.server.setup_status import setup_status
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,10 @@ def create_app(run_store: RunStore | None = None) -> FastAPI:
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/setup/status")
+    def get_setup_status() -> dict[str, Any]:
+        return setup_status()
 
     @app.post("/api/session")
     def create_session() -> dict[str, Any]:

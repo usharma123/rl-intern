@@ -68,8 +68,12 @@ def load_config(config_path: str | Path | None = None) -> Config:
 
     path = Path(config_path)
     if not path.exists():
+        if default_model := os.environ.get("RL_INTERN_DEFAULT_MODEL"):
+            return Config(model_name=default_model)
         return Config()
 
     with path.open("r", encoding="utf-8") as f:
         raw_config = json.load(f)
+    if default_model := os.environ.get("RL_INTERN_DEFAULT_MODEL"):
+        raw_config["model_name"] = default_model
     return Config.model_validate(substitute_env_vars(raw_config))

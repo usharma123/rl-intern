@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Box, Button, CircularProgress, TextField, Typography } from '@mui/material';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { useSessionStore } from '@/store/sessionStore';
@@ -13,12 +13,46 @@ const FEATURES = [
   ['RUNNER', 'local · modal'],
 ] as const;
 
+type SetupStatus = {
+  openrouter: boolean;
+  huggingface: boolean;
+  modalInstalled: boolean;
+  modalAuthenticated: boolean;
+  modalAppsDeployed: boolean;
+};
+
 export default function WelcomeScreen() {
   const createSession = useSessionStore((s) => s.createSession);
   const model = useLayoutStore((s) => s.model);
   const setModel = useLayoutStore((s) => s.setModel);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiFetch('/api/setup/status')
+      .then(async (res) => {
+        if (!res.ok) return;
+        const data = (await res.json()) as SetupStatus;
+        if (!cancelled) setSetupStatus(data);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const missingSetup = useMemo(() => {
+    if (!setupStatus) return [];
+    const missing: string[] = [];
+    if (!setupStatus.openrouter) missing.push('OpenRouter key');
+    if (!setupStatus.huggingface) missing.push('Hugging Face token');
+    if (!setupStatus.modalInstalled) missing.push('Modal dependency');
+    if (!setupStatus.modalAuthenticated) missing.push('Modal auth');
+    if (!setupStatus.modalAppsDeployed) missing.push('Modal apps');
+    return missing;
+  }, [setupStatus]);
 
   const handleStartSession = useCallback(async () => {
     if (isCreating) return;
@@ -279,6 +313,25 @@ export default function WelcomeScreen() {
             ↵ to confirm
           </Typography>
         </Box>
+
+        {missingSetup.length > 0 && (
+          <Alert
+            severity="warning"
+            variant="outlined"
+            sx={{
+              mt: 3,
+              width: '100%',
+              borderColor: 'var(--warn-border)',
+              color: 'var(--text)',
+              fontSize: '0.82rem',
+              fontFamily: 'var(--font-mono)',
+              alignItems: 'center',
+              '& .MuiAlert-icon': { color: 'var(--warn)' },
+            }}
+          >
+            Missing setup: {missingSetup.join(', ')}. Run `cd frontend && bun run setup`.
+          </Alert>
+        )}
 
         {error && (
           <Alert

@@ -12,6 +12,9 @@ def test_run_server_endpoints(tmp_path):
 
     client = TestClient(create_app(store))
 
+    setup = client.get("/api/setup/status")
+    assert setup.status_code == 200
+    assert "openrouter" in setup.json()
     assert client.get("/runs").status_code == 200
     session = client.post("/api/session")
     assert session.status_code == 200
