@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any
@@ -201,6 +202,7 @@ def _strip_artifacts(result: dict[str, Any]) -> dict[str, Any]:
 def _write_artifacts(run_dir: str | Path, artifacts: dict[str, str]) -> list[str]:
     root = Path(run_dir)
     root.mkdir(parents=True, exist_ok=True)
+    _clear_stale_modal_artifact_paths(root, artifacts)
     written = []
     for relative_path, encoded in artifacts.items():
         safe = Path(relative_path)
@@ -213,6 +215,24 @@ def _write_artifacts(run_dir: str | Path, artifacts: dict[str, str]) -> list[str
         bucket = _bucket_for(target)
         append_manifest_item(root, bucket, target, kind=f"modal_{bucket.rstrip('s')}")
     return written
+
+
+def _clear_stale_modal_artifact_paths(root: Path, artifacts: dict[str, str]) -> None:
+    modal_root = root / "modal_artifacts"
+    if not modal_root.exists():
+        return
+    output_roots = {
+        Path(relative_path).parts[0]
+        for relative_path in artifacts
+        if Path(relative_path).parts and Path(relative_path).parts[0] not in {"stdout.log", "stderr.log", "job_status.json", "job_script.py"}
+    }
+    for output_root in output_roots:
+        target = modal_root / output_root
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
 
 
 def _find_job_record(run_dir: str | Path | None, backend_id: str) -> JobRecord | None:

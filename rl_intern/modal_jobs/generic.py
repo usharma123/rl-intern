@@ -21,6 +21,15 @@ APP_NAME = "rl-intern-generic"
 FUNCTION_NAME = "run_job"
 GPU_T4_FUNCTION_NAME = "run_job_gpu_t4"
 VOLUME_NAME = "rl-intern-runs"
+LLM_PREINSTALLED_DEPENDENCIES = [
+    "transformers==5.7.0",
+    "trl==1.3.0",
+    "datasets==4.8.5",
+    "accelerate==1.13.0",
+    "peft==0.19.1",
+    "bitsandbytes==0.49.2",
+    "torch==2.11.0",
+]
 
 
 def function_name_for_hardware(hardware: str | None) -> str:
@@ -32,19 +41,20 @@ def function_name_for_hardware(hardware: str | None) -> str:
 
 def _build_app():
     if modal is None:
-        return None, None, None
+        return None, None, None, None
     try:
         volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
         image = modal.Image.debian_slim(python_version="3.11").pip_install("uv", "hf-transfer")
-        return modal.App(APP_NAME), image, volume
+        gpu_t4_image = image.pip_install(*LLM_PREINSTALLED_DEPENDENCIES)
+        return modal.App(APP_NAME), image, gpu_t4_image, volume
     except Exception:
         # Local imports should keep working without Modal credentials. The deploy
         # command runs this module in an authenticated Modal CLI process, where
         # app/image/volume will be constructed normally.
-        return None, None, None
+        return None, None, None, None
 
 
-app, _image, _volume = _build_app()
+app, _image, _gpu_t4_image, _volume = _build_app()
 
 
 def _collect_artifacts(root: Path) -> dict[str, str]:
@@ -91,7 +101,10 @@ def _run_job_locally(request: dict[str, Any]) -> dict[str, Any]:
         env.update(request.get("env") or {})
         env.update(request.get("secrets") or {})
         _configure_persistent_caches(env, root)
-        deps = request.get("dependencies") or []
+        deps = _filter_preinstalled_dependencies(
+            request.get("dependencies") or [],
+            request.get("preinstalled_dependencies") or [],
+        )
         main_cmd: list[str] | str
         use_shell = False
         if script:
@@ -174,6 +187,22 @@ def _python_unbuffered(command: list[str]) -> list[str]:
     return [command[0], "-u", *command[1:]]
 
 
+def _dependency_name(dependency: str) -> str:
+    normalized = str(dependency).strip()
+    for separator in ("==", ">=", "<=", "~=", "!=", ">", "<", "[", ";"):
+        if separator in normalized:
+            normalized = normalized.split(separator, 1)[0]
+    return normalized.strip().lower().replace("_", "-")
+
+
+def _filter_preinstalled_dependencies(
+    dependencies: list[str],
+    preinstalled_dependencies: list[str],
+) -> list[str]:
+    preinstalled = {_dependency_name(dep) for dep in preinstalled_dependencies}
+    return [str(dep) for dep in dependencies if _dependency_name(str(dep)) not in preinstalled]
+
+
 def _configure_persistent_caches(env: dict[str, str], fallback_root: Path) -> None:
     cache_root = Path("/runs/.cache") if Path("/runs").exists() else fallback_root / ".cache"
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -236,7 +265,7 @@ def _run_process_with_tee(
     return returncode
 
 
-if modal is not None and app is not None and _image is not None and _volume is not None:
+if modal is not None and app is not None and _image is not None and _gpu_t4_image is not None and _volume is not None:
 
     @app.function(image=_image, volumes={"/runs": _volume}, timeout=60 * 60 * 24)
     def run_job(request: dict[str, Any]) -> dict[str, Any]:
@@ -244,8 +273,10 @@ if modal is not None and app is not None and _image is not None and _volume is n
         _volume.commit()
         return result
 
-    @app.function(image=_image, volumes={"/runs": _volume}, gpu="T4", timeout=60 * 60 * 24)
+    @app.function(image=_gpu_t4_image, volumes={"/runs": _volume}, gpu="T4", timeout=60 * 60 * 24)
     def run_job_gpu_t4(request: dict[str, Any]) -> dict[str, Any]:
+        request = dict(request)
+        request.setdefault("preinstalled_dependencies", LLM_PREINSTALLED_DEPENDENCIES)
         result = _run_job_locally(request)
         _volume.commit()
         return result

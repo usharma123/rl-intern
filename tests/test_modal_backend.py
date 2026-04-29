@@ -7,7 +7,9 @@ from rl_intern.runners import modal_backend
 from agent.tools import modal_primitives
 from rl_intern.modal_jobs.generic import (
     GPU_T4_FUNCTION_NAME,
+    LLM_PREINSTALLED_DEPENDENCIES,
     _configure_persistent_caches,
+    _filter_preinstalled_dependencies,
     _python_unbuffered,
     _run_job_locally,
     function_name_for_hardware,
@@ -34,6 +36,27 @@ def test_modal_artifact_bucket_mapping():
     assert modal_backend._bucket_for(__import__("pathlib").Path("eval.json")) == "metrics"
     assert modal_backend._bucket_for(__import__("pathlib").Path("rollout.mp4")) == "videos"
     assert modal_backend._bucket_for(__import__("pathlib").Path("llm_output/adapter/adapter_model.safetensors")) == "adapters"
+
+
+def test_modal_artifact_write_clears_stale_output_directory(tmp_path):
+    stale = tmp_path / "modal_artifacts" / "llm_output" / "checkpoint-5" / "trainer_state.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale", encoding="utf-8")
+
+    written = modal_backend._write_artifacts(
+        tmp_path,
+        {
+            "llm_output/checkpoint-1/trainer_state.json": __import__("base64")
+            .b64encode(b'{"global_step": 1}')
+            .decode("ascii"),
+            "stdout.log": __import__("base64").b64encode(b"ok").decode("ascii"),
+        },
+    )
+
+    assert not stale.exists()
+    assert tmp_path.joinpath("modal_artifacts", "llm_output", "checkpoint-1", "trainer_state.json").exists()
+    assert tmp_path.joinpath("modal_artifacts", "stdout.log").exists()
+    assert any(path.endswith("checkpoint-1/trainer_state.json") for path in written)
 
 
 def test_generic_job_preserves_command_array_quotes():
@@ -98,6 +121,15 @@ def test_python_unbuffered_preserves_existing_flag():
         "-c",
         "print(1)",
     ]
+
+
+def test_generic_job_filters_preinstalled_llm_dependencies():
+    result = _filter_preinstalled_dependencies(
+        ["transformers", "torch>=2", "numpy", "peft[dev]"],
+        LLM_PREINSTALLED_DEPENDENCIES,
+    )
+
+    assert result == ["numpy"]
 
 
 def test_modal_job_run_handler_treats_running_launch_as_success(monkeypatch):
