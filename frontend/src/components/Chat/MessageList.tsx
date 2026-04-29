@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Box, Typography } from '@mui/material';
 import UserMessage from './UserMessage';
 import AssistantMessage from './AssistantMessage';
+import LogGroup from './LogGroup';
 import type { ChatMessage, SystemLevel } from '@/types/events';
 
 const SYS_PALETTE: Record<SystemLevel, { fg: string; border: string; bg: string }> = {
@@ -22,6 +23,49 @@ const SYS_PALETTE: Record<SystemLevel, { fg: string; border: string; bg: string 
   },
 };
 
+type SystemMessage = Extract<ChatMessage, { kind: 'system' }>;
+type Renderable =
+  | { kind: 'msg'; message: ChatMessage }
+  | { kind: 'sysGroup'; messages: SystemMessage[] };
+
+// Collapse consecutive `system` messages from the same source into one group so
+// streaming stderr (Python tracebacks especially) renders as a single block
+// rather than a stack of single-line cards.
+function buildRenderable(messages: ChatMessage[]): Renderable[] {
+  const out: Renderable[] = [];
+  let current: SystemMessage[] | null = null;
+  let currentSource: string | undefined;
+
+  const flush = () => {
+    if (!current) return;
+    if (current.length === 1) {
+      out.push({ kind: 'msg', message: current[0] });
+    } else {
+      out.push({ kind: 'sysGroup', messages: current });
+    }
+    current = null;
+    currentSource = undefined;
+  };
+
+  for (const m of messages) {
+    if (m.kind === 'system') {
+      const src = m.source ?? 'bridge';
+      if (current && currentSource === src) {
+        current.push(m);
+      } else {
+        flush();
+        current = [m];
+        currentSource = src;
+      }
+    } else {
+      flush();
+      out.push({ kind: 'msg', message: m });
+    }
+  }
+  flush();
+  return out;
+}
+
 interface Props {
   messages: ChatMessage[];
 }
@@ -29,6 +73,8 @@ interface Props {
 export default function MessageList({ messages }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const lastLength = useRef(0);
+
+  const renderable = useMemo(() => buildRenderable(messages), [messages]);
 
   useEffect(() => {
     const container = ref.current;
@@ -56,7 +102,11 @@ export default function MessageList({ messages }: Props) {
       }}
     >
       <Box sx={{ width: '100%', maxWidth: 880, mx: 'auto', mt: 'auto' }}>
-        {messages.map((m) => {
+        {renderable.map((entry) => {
+          if (entry.kind === 'sysGroup') {
+            return <LogGroup key={entry.messages[0].id} messages={entry.messages} />;
+          }
+          const m = entry.message;
           if (m.kind === 'user') return <UserMessage key={m.id} text={m.text} />;
           if (m.kind === 'assistant')
             return <AssistantMessage key={m.id} text={m.text} tools={m.tools} />;
@@ -103,7 +153,7 @@ export default function MessageList({ messages }: Props) {
               </Box>
             );
           }
-          // system / bridge log
+          // single system message — keep the original compact inline style
           const c = SYS_PALETTE[m.level];
           const tag = `${m.source ?? 'bridge'}/${m.level}`.toUpperCase();
           return (

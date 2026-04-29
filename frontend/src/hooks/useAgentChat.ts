@@ -30,6 +30,8 @@ export interface UseAgentChat {
 
 let counter = 0;
 const nextId = () => `m${++counter}`;
+const RECONNECT_BASE_DELAY_MS = 500;
+const RECONNECT_MAX_DELAY_MS = 5000;
 
 function cryptoRandom(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -51,9 +53,13 @@ export function useAgentChat(sessionId: string): UseAgentChat {
   const wsRef = useRef<WebSocket | null>(null);
   const model = useLayoutStore.getState().model;
 
-  // Open one WS per session id. Stays open for the session's lifetime.
+  // Keep one live WS per session id. If the dev server restarts, the browser
+  // socket closes permanently, so explicitly create a replacement.
   useEffect(() => {
     let cancelled = false;
+    let reconnectTimer: number | undefined;
+    let reconnectAttempt = 0;
+
     async function loadHistory() {
       setMessages([]);
       setPendingApprovals([]);
@@ -79,83 +85,113 @@ export function useAgentChat(sessionId: string): UseAgentChat {
     }
     loadHistory();
 
-    const url = apiWsUrl('/api/ws/chat');
-    url.searchParams.set('session_id', sessionId);
-    if (model) url.searchParams.set('model', model);
-
-    const ws = new WebSocket(url.toString());
-    wsRef.current = ws;
-    queueMicrotask(() => {
-      if (wsRef.current !== ws) return;
+    function scheduleReconnect() {
+      if (cancelled || reconnectTimer !== undefined) return;
       setConnection('connecting');
       setStatus('connecting');
-    });
+      const delay = Math.min(
+        RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt,
+        RECONNECT_MAX_DELAY_MS,
+      );
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = undefined;
+        connect();
+      }, delay);
+    }
 
-    ws.addEventListener('open', () => setConnection('open'));
-    ws.addEventListener('close', () => {
-      setConnection('closed');
-      setBridgeOpen(false);
-      setAgentReady(false);
-    });
-    ws.addEventListener('error', () => setConnection('error'));
-    ws.addEventListener('message', (event) => {
-      let parsed: RpcEvent;
-      try {
-        parsed = JSON.parse(event.data);
-      } catch {
-        return;
-      }
+    function connect() {
+      if (cancelled) return;
+      const url = apiWsUrl('/api/ws/chat');
+      url.searchParams.set('session_id', sessionId);
+      if (model) url.searchParams.set('model', model);
 
-      // Bridge-side events from the FastAPI WS shim
-      if (parsed.type === 'bridge_open') {
-        setBridgeOpen(true);
-        return;
-      }
-      if (parsed.type === 'bridge_log') {
-        const level = (parsed.data?.level as 'info' | 'warn' | 'error') ?? 'warn';
-        const source = (parsed.data?.source as string | undefined) ?? 'bridge';
-        const line = String(parsed.data?.line ?? '');
-        setMessages((prev) => [
-          ...prev,
-          { kind: 'system', id: nextId(), text: line, ts: Date.now(), level, source },
-        ]);
-        return;
-      }
-      if (parsed.type === 'bridge_exit') {
-        const code = parsed.data?.code as number | undefined;
-        const text = `agent process exited (code ${code ?? '?'})`;
-        setMessages((prev) => [
-          ...prev,
-          {
-            kind: 'system',
-            id: nextId(),
-            text,
-            ts: Date.now(),
-            level: code === 0 ? 'info' : 'error',
-            source: 'exit',
-          },
-        ]);
+      const ws = new WebSocket(url.toString());
+      wsRef.current = ws;
+      setConnection('connecting');
+      setStatus('connecting');
+
+      ws.addEventListener('open', () => {
+        if (wsRef.current !== ws) return;
+        reconnectAttempt = 0;
+        setConnection('open');
+      });
+      ws.addEventListener('close', () => {
+        if (wsRef.current !== ws) return;
         setBridgeOpen(false);
         setAgentReady(false);
-        return;
-      }
+        scheduleReconnect();
+      });
+      ws.addEventListener('error', () => {
+        if (wsRef.current !== ws) return;
+        setConnection('error');
+        scheduleReconnect();
+      });
+      ws.addEventListener('message', (event) => {
+        if (wsRef.current !== ws) return;
+        let parsed: RpcEvent;
+        try {
+          parsed = JSON.parse(event.data);
+        } catch {
+          return;
+        }
 
-      // First sign of life from the agent itself
-      if (parsed.type === 'ready') setAgentReady(true);
+        // Bridge-side events from the FastAPI WS shim
+        if (parsed.type === 'bridge_open') {
+          setBridgeOpen(true);
+          return;
+        }
+        if (parsed.type === 'bridge_log') {
+          const level = (parsed.data?.level as 'info' | 'warn' | 'error') ?? 'warn';
+          const source = (parsed.data?.source as string | undefined) ?? 'bridge';
+          const line = String(parsed.data?.line ?? '');
+          setMessages((prev) => [
+            ...prev,
+            { kind: 'system', id: nextId(), text: line, ts: Date.now(), level, source },
+          ]);
+          return;
+        }
+        if (parsed.type === 'bridge_exit') {
+          const code = parsed.data?.code as number | undefined;
+          const text = `agent process exited (code ${code ?? '?'})`;
+          setMessages((prev) => [
+            ...prev,
+            {
+              kind: 'system',
+              id: nextId(),
+              text,
+              ts: Date.now(),
+              level: code === 0 ? 'info' : 'error',
+              source: 'exit',
+            },
+          ]);
+          setBridgeOpen(false);
+          setAgentReady(false);
+          return;
+        }
 
-      if (parsed.status) setStatus(parsed.status);
-      else if (parsed.type) setStatus(parsed.type);
-      reduce(parsed, setMessages, setPendingApprovals, setPlan, setJobs, setArtifacts);
-    });
+        // First sign of life from the agent itself
+        if (parsed.type === 'ready') setAgentReady(true);
+
+        if (parsed.status) setStatus(parsed.status);
+        else if (parsed.type) setStatus(parsed.type);
+        reduce(parsed, setMessages, setPendingApprovals, setPlan, setJobs, setArtifacts);
+      });
+    }
+
+    connect();
 
     return () => {
       cancelled = true;
+      if (reconnectTimer !== undefined) {
+        window.clearTimeout(reconnectTimer);
+      }
       try {
-        ws.send(JSON.stringify({ type: 'shutdown', id: 'shutdown' }));
+        wsRef.current?.send(JSON.stringify({ type: 'shutdown', id: 'shutdown' }));
       } catch {
         /* ignore */
       }
-      ws.close();
+      wsRef.current?.close();
       wsRef.current = null;
     };
   }, [sessionId, model]);
