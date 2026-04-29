@@ -5,6 +5,12 @@ from pathlib import Path
 from typing import Any
 
 from rl_intern.domains.llm_trl.dataset import inspect_llm_dataset
+from rl_intern.domains.llm_trl.evaluation import (
+    dpo_evidence,
+    evaluation_summary,
+    grpo_evidence,
+    sft_evidence,
+)
 from rl_intern.domains.llm_trl.scripts import build_trl_training_script
 from rl_intern.domains.llm_trl.verifier import validate_grpo_verifier
 from rl_intern.orchestrator.adapters import DomainAdapter
@@ -114,12 +120,23 @@ class LLMTRLAdapter(DomainAdapter):
         base_generations = _read_modal_json(run_dir, "base_generations.json")
         adapter_generations = _read_modal_json(run_dir, "adapter_generations.json")
         eval_metrics = _read_modal_json(run_dir, "eval_metrics.json")
+        preference_metrics = _read_modal_json(run_dir, "preference_metrics.json")
+        reward_metrics = _read_modal_json(run_dir, "reward_metrics.json")
         eval_dataset = _read_modal_json(run_dir, "eval_dataset_info.json")
         evidence = _read_modal_json(run_dir, "improvement_evidence.json")
+        summary = _read_modal_json(run_dir, "evaluation_summary.json")
         samples = generation_result.get("samples") or _default_eval_prompts()
         status = generation_result.get("status", "pending_generation")
-        if eval_metrics and not evidence:
-            evidence = _build_improvement_evidence(eval_metrics, _improvement_threshold_pct(plan))
+        if not evidence:
+            evidence = _build_method_evidence(plan, eval_metrics, preference_metrics, reward_metrics)
+        if not summary:
+            summary = evaluation_summary(
+                method=_method(plan),
+                evidence=evidence or _missing_evidence(),
+                eval_dataset=eval_dataset,
+                metrics=_method_metrics(_method(plan), eval_metrics, preference_metrics, reward_metrics),
+                samples=samples,
+            )
         result = {
             "method": _method(plan),
             "model": _input(plan, "model"),
@@ -127,18 +144,24 @@ class LLMTRLAdapter(DomainAdapter):
             "base_samples": base_generations.get("samples", []),
             "adapter_samples": adapter_generations.get("samples", samples),
             "eval_metrics": eval_metrics,
+            "preference_metrics": preference_metrics,
+            "reward_metrics": reward_metrics,
             "eval_dataset": eval_dataset,
             "improvement_evidence": evidence or _missing_evidence(),
+            "evaluation_summary": summary,
             "metrics": {
                 "status": status,
                 "sample_count": len(samples),
                 "source": generation_result.get("path", "default_prompts"),
                 "improvement_verdict": (evidence or {}).get("verdict", "inconclusive"),
+                "run_class": (evidence or {}).get("run_class", "standard"),
             },
         }
         _write_json(run_dir, "llm_eval.json", result, "metrics")
         if evidence:
             _write_json(run_dir, "improvement_evidence.json", evidence, "metrics")
+        if summary:
+            _write_json(run_dir, "evaluation_summary.json", summary, "metrics")
         if run_dir:
             append_manifest_item(
                 run_dir,
@@ -156,11 +179,15 @@ class LLMTRLAdapter(DomainAdapter):
         eval_result = _read_json(run_dir, "llm_eval.json")
         trainer_state = _read_modal_json(run_dir, "trainer_state.json")
         eval_metrics = eval_result.get("eval_metrics") or _read_modal_json(run_dir, "eval_metrics.json")
+        preference_metrics = eval_result.get("preference_metrics") or _read_modal_json(run_dir, "preference_metrics.json")
+        reward_metrics = eval_result.get("reward_metrics") or _read_modal_json(run_dir, "reward_metrics.json")
+        summary = eval_result.get("evaluation_summary") or _read_json(run_dir, "evaluation_summary.json")
         evidence = eval_result.get("improvement_evidence") or _read_json(run_dir, "improvement_evidence.json")
-        if eval_metrics and not evidence:
-            evidence = _build_improvement_evidence(eval_metrics, _improvement_threshold_pct(plan))
+        if not evidence:
+            evidence = _build_method_evidence(plan, eval_metrics, preference_metrics, reward_metrics)
         evidence = evidence or _missing_evidence()
         verdict = evidence.get("verdict", "inconclusive")
+        run_class = evidence.get("run_class", summary.get("run_class", "standard") if isinstance(summary, dict) else "standard")
         report = [
             "# LLM TRL Experiment Report",
             "",
@@ -172,6 +199,7 @@ class LLMTRLAdapter(DomainAdapter):
             f"- Eval status: `{eval_result.get('metrics', {}).get('status', 'unknown')}`",
             f"- Eval samples: `{eval_result.get('metrics', {}).get('sample_count', 0)}`",
             f"- Improvement verdict: `{verdict}`",
+            f"- Run class: `{run_class}`",
             f"- Improvement claim: {_claim_sentence(evidence)}",
         ]
         if evidence.get("reason"):
@@ -179,7 +207,7 @@ class LLMTRLAdapter(DomainAdapter):
         warnings = evidence.get("warnings") or []
         if warnings:
             report.append(f"- Evidence warnings: {'; '.join(str(w) for w in warnings)}")
-        report.extend(_metrics_table(eval_metrics))
+        report.extend(_metrics_table(_method(plan), eval_metrics, preference_metrics, reward_metrics))
         training_rows = _training_metrics_rows(trainer_state)
         if training_rows:
             report.extend(["", "## Training Metrics", "", "| Step | Loss | Learning Rate | Token Accuracy |", "| --- | ---: | ---: | ---: |"])
@@ -224,6 +252,9 @@ class LLMTRLAdapter(DomainAdapter):
         if artifact_paths:
             report.extend(["", "## Evidence Artifacts", ""])
             report.extend(f"- `{path}`" for path in artifact_paths)
+        comparison_path = _write_comparison_report(plan, run_dir)
+        if comparison_path:
+            report.extend(["", "## Comparison", "", f"- `{comparison_path}`"])
         if _method(plan) == "grpo":
             verifier = _read_json(run_dir, "llm_grpo_verifier.json")
             report.append(f"- GRPO verifier valid: `{verifier.get('valid')}`")
@@ -248,7 +279,12 @@ class LLMTRLAdapter(DomainAdapter):
                 "llm_eval.json",
                 "metrics.json",
                 "eval_metrics.json",
+                "sft_metrics.json",
+                "preference_metrics.json",
+                "reward_metrics.json",
+                "reward_distribution.json",
                 "improvement_evidence.json",
+                "evaluation_summary.json",
                 "eval_dataset_info.json",
                 "trainer_state.json",
                 "llm_dataset_inspect.json",
@@ -344,8 +380,20 @@ def _script_args(plan: ExperimentPlan, run_dir: str | None) -> list[str]:
             str(plan.inputs.get("max_new_tokens", 128)),
             "--improvement-threshold-pct",
             str(_improvement_threshold_pct(plan)),
+            "--preference-margin-threshold",
+            str(plan.inputs.get("preference_margin_threshold", 0.01)),
+            "--reward-threshold",
+            str(plan.inputs.get("reward_threshold", 0.01)),
         ]
     )
+    if plan.inputs.get("eval_prompt_suite") is not None:
+        args.extend(["--eval-prompt-suite", json.dumps(plan.inputs["eval_prompt_suite"])])
+    if plan.inputs.get("eval_categories") is not None:
+        args.extend(["--eval-categories", json.dumps(plan.inputs["eval_categories"])])
+    if plan.inputs.get("judge_mode") is not None:
+        args.extend(["--judge-mode", str(plan.inputs["judge_mode"])])
+    if plan.inputs.get("smoke_only_thresholds") is not None:
+        args.extend(["--smoke-only-thresholds", json.dumps(plan.inputs["smoke_only_thresholds"])])
     for stop in plan.inputs.get("stop_sequences", ["### Human:", "\n### Human:"]):
         args.extend(["--stop-sequence", str(stop)])
     if bool(plan.inputs.get("fp16")) or _default_fp16(plan):
@@ -374,7 +422,14 @@ def _write_json(
     path = Path(run_dir) / filename
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    append_manifest_item(run_dir, bucket, path, kind=filename.removesuffix(".json"))
+    metadata = {}
+    if filename in {"evaluation_summary.json", "improvement_evidence.json"}:
+        metadata = {
+            key: payload[key]
+            for key in ("verdict", "run_class", "reason")
+            if key in payload
+        }
+    append_manifest_item(run_dir, bucket, path, kind=filename.removesuffix(".json"), metadata=metadata)
 
 
 def _read_json(run_dir: str | None, filename: str) -> dict[str, Any]:
@@ -512,7 +567,7 @@ def _fmt_metric(value: Any) -> str:
     return "n/a"
 
 
-def _metrics_table(eval_metrics: dict[str, Any]) -> list[str]:
+def _sft_metrics_table(eval_metrics: dict[str, Any]) -> list[str]:
     if not eval_metrics:
         return [
             "",
@@ -556,7 +611,12 @@ def _evidence_artifact_paths(run_dir: str | None) -> list[str]:
     names = [
         "eval_dataset_info.json",
         "eval_metrics.json",
+        "sft_metrics.json",
+        "preference_metrics.json",
+        "reward_metrics.json",
+        "reward_distribution.json",
         "improvement_evidence.json",
+        "evaluation_summary.json",
         "base_generations.json",
         "adapter_generations.json",
         "sample_generations.json",
@@ -582,3 +642,140 @@ def _find_modal_file(run_dir: str, filename: str) -> Path | None:
     for path in sorted(root.glob(f"**/{filename}")):
         return path
     return None
+
+
+def _build_method_evidence(
+    plan: ExperimentPlan,
+    eval_metrics: dict[str, Any],
+    preference_metrics: dict[str, Any],
+    reward_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    method = _method(plan)
+    smoke_thresholds = plan.inputs.get("smoke_only_thresholds")
+    if not isinstance(smoke_thresholds, dict):
+        smoke_thresholds = None
+    if method == "dpo":
+        return dpo_evidence(
+            preference_metrics,
+            threshold=float(plan.inputs.get("preference_margin_threshold", 0.01)),
+            max_steps=plan.inputs.get("max_steps"),
+            max_samples=plan.inputs.get("max_samples"),
+            smoke_thresholds=smoke_thresholds,
+        )
+    if method == "grpo":
+        return grpo_evidence(
+            reward_metrics,
+            threshold=float(plan.inputs.get("reward_threshold", 0.01)),
+            max_steps=plan.inputs.get("max_steps"),
+            max_samples=plan.inputs.get("max_samples"),
+            smoke_thresholds=smoke_thresholds,
+        )
+    return sft_evidence(
+        eval_metrics,
+        threshold_pct=_improvement_threshold_pct(plan),
+        max_steps=plan.inputs.get("max_steps"),
+        max_samples=plan.inputs.get("max_samples"),
+        smoke_thresholds=smoke_thresholds,
+    )
+
+
+def _method_metrics(
+    method: str,
+    eval_metrics: dict[str, Any],
+    preference_metrics: dict[str, Any],
+    reward_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    if method == "dpo":
+        return preference_metrics
+    if method == "grpo":
+        return reward_metrics
+    return eval_metrics
+
+
+def _metrics_table(
+    method: str,
+    eval_metrics: dict[str, Any],
+    preference_metrics: dict[str, Any] | None = None,
+    reward_metrics: dict[str, Any] | None = None,
+) -> list[str]:
+    if method == "dpo":
+        metrics = preference_metrics or {}
+        if not metrics:
+            return ["", "## DPO Preference Metrics", "", "No held-out DPO preference metrics were found."]
+        base = metrics.get("base") or {}
+        adapter = metrics.get("adapter") or {}
+        return [
+            "",
+            "## DPO Preference Metrics",
+            "",
+            "| Model | Mean Margin | Pair Count |",
+            "| --- | ---: | ---: |",
+            f"| Base | {_fmt_metric(base.get('mean_margin'))} | {_fmt_metric(base.get('pairs'))} |",
+            f"| Adapter | {_fmt_metric(adapter.get('mean_margin'))} | {_fmt_metric(adapter.get('pairs'))} |",
+        ]
+    if method == "grpo":
+        metrics = reward_metrics or {}
+        if not metrics:
+            return ["", "## GRPO Reward Metrics", "", "No held-out GRPO reward metrics were found."]
+        base = metrics.get("base") or {}
+        adapter = metrics.get("adapter") or {}
+        return [
+            "",
+            "## GRPO Reward Metrics",
+            "",
+            "| Model | Mean Reward | Samples | Failures |",
+            "| --- | ---: | ---: | ---: |",
+            f"| Base | {_fmt_metric(base.get('mean_reward'))} | {_fmt_metric(base.get('samples'))} | {_fmt_metric(base.get('failure_count'))} |",
+            f"| Adapter | {_fmt_metric(adapter.get('mean_reward'))} | {_fmt_metric(adapter.get('samples'))} | {_fmt_metric(adapter.get('failure_count'))} |",
+        ]
+    return _sft_metrics_table(eval_metrics)
+
+
+def _write_comparison_report(plan: ExperimentPlan, run_dir: str | None) -> str | None:
+    group = plan.inputs.get("comparison_group")
+    if not group or not run_dir:
+        return None
+    root = Path(run_dir).parent
+    rows = []
+    for candidate in sorted(root.glob("run_*")):
+        plan_path = candidate / "experiment_plan.json"
+        eval_path = candidate / "llm_eval.json"
+        if not plan_path.exists() or not eval_path.exists():
+            continue
+        try:
+            candidate_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            candidate_eval = json.loads(eval_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if candidate_plan.get("inputs", {}).get("comparison_group") != group:
+            continue
+        evidence = candidate_eval.get("improvement_evidence") or {}
+        rows.append(
+            {
+                "run": candidate.name,
+                "max_samples": candidate_plan.get("inputs", {}).get("max_samples"),
+                "max_steps": candidate_plan.get("inputs", {}).get("max_steps"),
+                "verdict": evidence.get("verdict", "unknown"),
+                "run_class": evidence.get("run_class", "standard"),
+                "reason": evidence.get("reason", ""),
+            }
+        )
+    if not rows:
+        return None
+    lines = [
+        "# LLM Comparison Report",
+        "",
+        f"- Comparison group: `{group}`",
+        "",
+        "| Run | Samples | Steps | Verdict | Class | Reason |",
+        "| --- | ---: | ---: | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| {row['run']} | {_fmt_metric(row['max_samples'])} | {_fmt_metric(row['max_steps'])} | "
+            f"{row['verdict']} | {row['run_class']} | {row['reason']} |"
+        )
+    path = Path(run_dir) / "comparison_report.md"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    append_manifest_item(run_dir, "reports", path, kind="llm_comparison_report")
+    return str(path)

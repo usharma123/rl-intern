@@ -1,5 +1,6 @@
 from rl_intern.domains.llm_trl.dataset import inspect_llm_dataset
 from rl_intern.domains.llm_trl.adapter import LLMTRLAdapter
+from rl_intern.domains.llm_trl.evaluation import dpo_evidence, grpo_evidence, normalize_preference_row, sft_evidence
 from rl_intern.domains.llm_trl.scripts import build_trl_training_script
 from rl_intern.domains.llm_trl.verifier import validate_grpo_verifier
 from agent.tools.orchestrator import create_experiment_plan, validate_experiment_plan
@@ -81,8 +82,18 @@ def test_grpo_verifier_rejects_non_numeric_score():
 def test_generate_grpo_script_contains_reward_func():
     script = build_trl_training_script("grpo")
 
+    compile(script, "train_grpo.py", "exec")
     assert "GRPOTrainer" in script
     assert "reward_func" in script
+
+
+def test_generate_dpo_script_contains_preference_metrics():
+    script = build_trl_training_script("dpo")
+
+    compile(script, "train_dpo.py", "exec")
+    assert "normalize_preference_dataset" in script
+    assert "preference_metrics.json" in script
+    assert "margin_verdict" in script
 
 
 def test_generate_sft_script_logs_phases_and_limits_samples():
@@ -107,6 +118,8 @@ def test_generate_sft_script_emits_defensible_eval_artifacts():
     assert "adapter_generations.json" in script
     assert "eval_metrics.json" in script
     assert "improvement_evidence.json" in script
+    assert "evaluation_summary.json" in script
+    assert "sft_metrics.json" in script
     assert "stop_at_sequences" in script
     assert "### Human:" in script
     assert "overlap_with_train" in script
@@ -217,6 +230,65 @@ def test_llm_train_passes_script_args_to_modal(monkeypatch, tmp_path):
     assert script_args[script_args.index("--max-new-tokens") + 1] == "128"
     assert script_args[script_args.index("--improvement-threshold-pct") + 1] == "1.0"
     assert "--stop-sequence" in script_args
+    assert "--preference-margin-threshold" in script_args
+    assert "--reward-threshold" in script_args
+
+
+def test_sft_evidence_marks_tiny_runs_smoke_only():
+    evidence = sft_evidence(
+        {"base": {"loss": 1.0, "examples": 20}, "adapter": {"loss": 0.999, "examples": 20}},
+        threshold_pct=1.0,
+        max_steps=1,
+        max_samples=20,
+    )
+
+    assert evidence["verdict"] == "inconclusive"
+    assert evidence["run_class"] == "smoke_only"
+
+
+def test_dpo_margin_verdicts():
+    improved = dpo_evidence(
+        {"base": {"mean_margin": 0.1, "pairs": 20}, "adapter": {"mean_margin": 0.2, "pairs": 20}},
+        threshold=0.01,
+    )
+    regressed = dpo_evidence(
+        {"base": {"mean_margin": 0.2, "pairs": 20}, "adapter": {"mean_margin": 0.1, "pairs": 20}},
+        threshold=0.01,
+    )
+    inconclusive = dpo_evidence(
+        {"base": {"mean_margin": 0.2, "pairs": 20}, "adapter": {"mean_margin": 0.205, "pairs": 20}},
+        threshold=0.01,
+    )
+
+    assert improved["verdict"] == "improved"
+    assert regressed["verdict"] == "regressed"
+    assert inconclusive["verdict"] == "inconclusive"
+
+
+def test_grpo_reward_verdicts_and_failure_regression():
+    improved = grpo_evidence(
+        {"base": {"mean_reward": 0.2, "samples": 20}, "adapter": {"mean_reward": 0.4, "samples": 20}},
+        threshold=0.01,
+    )
+    failed = grpo_evidence(
+        {
+            "base": {"mean_reward": 0.2, "samples": 20, "failure_count": 0},
+            "adapter": {"mean_reward": 0.4, "samples": 20, "failure_count": 1},
+        },
+        threshold=0.01,
+    )
+
+    assert improved["verdict"] == "improved"
+    assert failed["verdict"] == "regressed"
+
+
+def test_normalize_preference_row_accepts_chat_pairs():
+    row = {
+        "chosen": [{"role": "user", "content": "2+2"}, {"role": "assistant", "content": "4"}],
+        "rejected": [{"role": "user", "content": "2+2"}, {"role": "assistant", "content": "5"}],
+    }
+
+    assert normalize_preference_row(row) == {"prompt": "2+2", "chosen": "4", "rejected": "5"}
 
 
 def test_llm_train_defaults_fp16_on_modal_t4(monkeypatch, tmp_path):
@@ -377,6 +449,75 @@ def test_llm_evaluate_marks_regression_from_modal_metrics(tmp_path):
     assert result["improvement_evidence"]["verdict"] == "regressed"
 
 
+def test_llm_evaluate_reads_dpo_preference_metrics(tmp_path):
+    output = tmp_path / "modal_artifacts" / "dpo_output"
+    output.mkdir(parents=True)
+    (output / "sample_generations.json").write_text(
+        '{"status": "completed", "samples": [{"prompt": "p", "completion": "adapter", "score": null}]}',
+        encoding="utf-8",
+    )
+    (output / "preference_metrics.json").write_text(
+        '{"status": "completed", "base": {"mean_margin": 0.1, "pairs": 20}, '
+        '"adapter": {"mean_margin": 0.2, "pairs": 20}}',
+        encoding="utf-8",
+    )
+    plan = ExperimentPlan(
+        plan_id="plan_test",
+        domain="llm_trl",
+        objective="tiny dpo",
+        inputs={
+            "method": "dpo",
+            "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            "dataset": "trl-lib/ultrafeedback_binarized",
+            "max_steps": 100,
+            "max_samples": 200,
+        },
+        stages=[StageSpec(name="inspect"), StageSpec(name="evaluate")],
+        expected_artifacts=["adapter"],
+    )
+
+    result = LLMTRLAdapter().evaluate(plan, run_dir=str(tmp_path))
+
+    assert result["improvement_evidence"]["verdict"] == "improved"
+    assert result["preference_metrics"]["adapter"]["mean_margin"] == 0.2
+    assert result["evaluation_summary"]["method"] == "dpo"
+
+
+def test_llm_evaluate_reads_grpo_reward_metrics(tmp_path):
+    output = tmp_path / "modal_artifacts" / "grpo_output"
+    output.mkdir(parents=True)
+    (output / "sample_generations.json").write_text(
+        '{"status": "completed", "samples": [{"prompt": "p", "completion": "adapter", "score": null}]}',
+        encoding="utf-8",
+    )
+    (output / "reward_metrics.json").write_text(
+        '{"status": "completed", "base": {"mean_reward": 0.1, "samples": 20, "failure_count": 0}, '
+        '"adapter": {"mean_reward": 0.3, "samples": 20, "failure_count": 0}}',
+        encoding="utf-8",
+    )
+    plan = ExperimentPlan(
+        plan_id="plan_test",
+        domain="llm_trl",
+        objective="tiny grpo",
+        inputs={
+            "method": "grpo",
+            "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            "dataset": "toy",
+            "max_steps": 100,
+            "max_samples": 200,
+        },
+        reward=RewardSpec(type="python_verifier", verifier_source="def score(example, completion): return 1.0"),
+        stages=[StageSpec(name="inspect"), StageSpec(name="evaluate")],
+        expected_artifacts=["adapter"],
+    )
+
+    result = LLMTRLAdapter().evaluate(plan, run_dir=str(tmp_path))
+
+    assert result["improvement_evidence"]["verdict"] == "improved"
+    assert result["reward_metrics"]["adapter"]["mean_reward"] == 0.3
+    assert result["evaluation_summary"]["method"] == "grpo"
+
+
 def test_llm_report_includes_sample_generation(tmp_path):
     (tmp_path / "llm_dataset_inspect.json").write_text('{"valid": true}', encoding="utf-8")
     (tmp_path / "llm_smoke_test.json").write_text('{"passed": true}', encoding="utf-8")
@@ -476,3 +617,54 @@ def test_llm_report_includes_base_vs_adapter_metrics_and_training_state(tmp_path
     assert "| Adapter | 1.8000 | 6.0000 | 20 |" in report
     assert "| 1 | 1.5000 | 0.0002 | 0.6200 |" in report
     assert "Base vs Adapter Samples" in report
+
+
+def test_llm_report_includes_dpo_and_grpo_metric_sections(tmp_path):
+    (tmp_path / "llm_dataset_inspect.json").write_text('{"valid": true}', encoding="utf-8")
+    (tmp_path / "llm_smoke_test.json").write_text('{"passed": true}', encoding="utf-8")
+    (tmp_path / "llm_eval.json").write_text(
+        '{"metrics": {"status": "completed", "sample_count": 1}, '
+        '"preference_metrics": {"base": {"mean_margin": 0.1, "pairs": 20}, '
+        '"adapter": {"mean_margin": 0.2, "pairs": 20}}, '
+        '"improvement_evidence": {"verdict": "improved", "method": "dpo", "reason": "margin improved"}, '
+        '"samples": [{"prompt": "p", "completion": "adapter"}]}',
+        encoding="utf-8",
+    )
+    dpo_plan = ExperimentPlan(
+        plan_id="plan_test",
+        domain="llm_trl",
+        objective="tiny dpo",
+        inputs={"method": "dpo", "model": "tiny", "dataset": "prefs"},
+        stages=[StageSpec(name="report")],
+        expected_artifacts=["adapter"],
+    )
+
+    LLMTRLAdapter().report(dpo_plan, run_dir=str(tmp_path))
+    dpo_report = (tmp_path / "llm_report.md").read_text(encoding="utf-8")
+
+    assert "DPO Preference Metrics" in dpo_report
+    assert "| Adapter | 0.2000 | 20 |" in dpo_report
+
+    (tmp_path / "llm_eval.json").write_text(
+        '{"metrics": {"status": "completed", "sample_count": 1}, '
+        '"reward_metrics": {"base": {"mean_reward": 0.1, "samples": 20, "failure_count": 0}, '
+        '"adapter": {"mean_reward": 0.2, "samples": 20, "failure_count": 0}}, '
+        '"improvement_evidence": {"verdict": "improved", "method": "grpo", "reason": "reward improved"}, '
+        '"samples": [{"prompt": "p", "completion": "adapter"}]}',
+        encoding="utf-8",
+    )
+    grpo_plan = ExperimentPlan(
+        plan_id="plan_test",
+        domain="llm_trl",
+        objective="tiny grpo",
+        inputs={"method": "grpo", "model": "tiny", "dataset": "prompts"},
+        reward=RewardSpec(type="python_verifier", verifier_source="def score(example, completion): return 1.0"),
+        stages=[StageSpec(name="report")],
+        expected_artifacts=["adapter"],
+    )
+
+    LLMTRLAdapter().report(grpo_plan, run_dir=str(tmp_path))
+    grpo_report = (tmp_path / "llm_report.md").read_text(encoding="utf-8")
+
+    assert "GRPO Reward Metrics" in grpo_report
+    assert "| Adapter | 0.2000 | 20 | 0 |" in grpo_report
