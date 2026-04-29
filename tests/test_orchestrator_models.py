@@ -33,6 +33,18 @@ def test_train_requires_inspect_stage():
         )
 
 
+def test_gym_plan_requires_env_id():
+    with pytest.raises(ValueError, match="inputs.env_id"):
+        ExperimentPlan(
+            plan_id="plan_bad",
+            domain="gym_sb3",
+            objective="bad",
+            inputs={},
+            stages=[StageSpec(name="inspect")],
+            expected_artifacts=["model.zip"],
+        )
+
+
 def test_grpo_requires_python_verifier_reward():
     with pytest.raises(ValueError, match="python_verifier"):
         ExperimentPlan(

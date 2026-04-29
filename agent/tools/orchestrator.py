@@ -35,7 +35,7 @@ def create_experiment_plan(
         inputs=inputs,
         reward=RewardSpec.model_validate(reward or _default_reward(domain, inputs)),
         runner=RunnerSpec.model_validate(_normalize_runner(runner, domain, inputs)),
-        stages=[StageSpec(name=stage) for stage in (stages or _default_stages())],
+        stages=[StageSpec(name=stage) for stage in _normalize_stage_names(stages or _default_stages())],
         expected_artifacts=expected_artifacts or _default_artifacts(domain, inputs),
         research_required=research_required,
         research_completed=research_completed,
@@ -122,6 +122,16 @@ def _default_stages() -> list[str]:
     return ["inspect", "prepare", "smoke_test", "train", "evaluate", "report"]
 
 
+def _normalize_stage_names(stages: list[str]) -> list[str]:
+    normalized = []
+    for stage in stages:
+        if stage not in normalized:
+            normalized.append(stage)
+    if "train" in normalized and "inspect" not in normalized:
+        normalized.insert(0, "inspect")
+    return normalized
+
+
 def _resolve_plan(plan: dict[str, Any], run_dir: str | None = None) -> dict[str, Any]:
     candidate = dict(plan) if isinstance(plan, dict) else plan
     if _has_required_plan_fields(candidate):
@@ -180,8 +190,15 @@ def _normalize_plan(plan: dict[str, Any]) -> dict[str, Any]:
     domain = str(normalized.get("domain", ""))
     if isinstance(normalized.get("inputs"), dict):
         normalized["inputs"] = _normalize_inputs(domain, normalized["inputs"])
-    if isinstance(normalized.get("stages"), list) and normalized["stages"] and isinstance(normalized["stages"][0], str):
-        normalized["stages"] = [{"name": stage} for stage in normalized["stages"]]
+    if isinstance(normalized.get("stages"), list) and normalized["stages"]:
+        if isinstance(normalized["stages"][0], str):
+            normalized["stages"] = [
+                {"name": stage} for stage in _normalize_stage_names(normalized["stages"])
+            ]
+        elif all(isinstance(stage, dict) and "name" in stage for stage in normalized["stages"]):
+            stages_by_name = {stage["name"]: dict(stage) for stage in normalized["stages"]}
+            stage_names = _normalize_stage_names([stage["name"] for stage in normalized["stages"]])
+            normalized["stages"] = [stages_by_name.get(stage, {"name": stage}) for stage in stage_names]
     if "reward" not in normalized and domain:
         normalized["reward"] = _default_reward(domain, normalized.get("inputs", {}))
     normalized["runner"] = _normalize_runner(normalized.get("runner"), domain, normalized.get("inputs", {}))
@@ -261,7 +278,15 @@ def _default_artifacts(domain: str, inputs: dict[str, Any]) -> list[str]:
 
 
 async def create_experiment_plan_handler(args: dict[str, Any], session: Any = None, **_: Any) -> tuple[str, bool]:
-    result = create_experiment_plan(**args)
+    try:
+        result = create_experiment_plan(**args)
+    except Exception as exc:
+        return json_ready(
+            {
+                "error": str(exc),
+                "hint": "If a plan includes train, include inspect first. For example: inspect, prepare, train, evaluate, report.",
+            }
+        ), False
     if session and "error" not in result:
         await session.send_event(Event(event_type="plan_update", data={"plan": result}))
     return json_ready(result), "error" not in result
@@ -291,10 +316,13 @@ async def update_experiment_plan_handler(args: dict[str, Any], session: Any = No
 
 
 async def run_experiment_stage_handler(args: dict[str, Any], session: Any = None, **_: Any) -> tuple[str, bool]:
-    args = {
-        **args,
-        "plan": _resolve_plan(args.get("plan", {}), args.get("run_dir") or getattr(session, "run_dir", None)),
-    }
+    try:
+        args = {
+            **args,
+            "plan": _resolve_plan(args.get("plan", {}), args.get("run_dir") or getattr(session, "run_dir", None)),
+        }
+    except Exception as exc:
+        return json_ready(_tool_error(str(exc), args)), False
     if session:
         await session.send_event(
             Event(
@@ -302,10 +330,13 @@ async def run_experiment_stage_handler(args: dict[str, Any], session: Any = None
                 data={"stage": args.get("stage"), "status": "running", "plan": args.get("plan")},
             )
         )
-    if _stage_needs_main_thread(args):
-        result = run_experiment_stage(**args)
-    else:
-        result = await asyncio.to_thread(run_experiment_stage, **args)
+    try:
+        if _stage_needs_main_thread(args):
+            result = run_experiment_stage(**args)
+        else:
+            result = await asyncio.to_thread(run_experiment_stage, **args)
+    except Exception as exc:
+        result = _tool_error(str(exc), args)
     if session:
         await session.send_event(
             Event(
@@ -318,6 +349,23 @@ async def run_experiment_stage_handler(args: dict[str, Any], session: Any = None
             )
         )
     return json_ready(result), not _stage_result_failed(result.get("result", result))
+
+
+def _tool_error(error: str, args: dict[str, Any]) -> dict[str, Any]:
+    plan = args.get("plan") if isinstance(args, dict) else {}
+    domain = plan.get("domain") if isinstance(plan, dict) else None
+    hint = None
+    if domain == "gym_sb3" and "inputs.env_id" in error:
+        hint = (
+            "Add the Gymnasium environment ID to plan.inputs.env_id, "
+            'for example {"inputs": {"env_id": "CartPole-v1"}}.'
+        )
+    return {
+        "stage": args.get("stage") if isinstance(args, dict) else None,
+        "domain": domain,
+        "error": error,
+        "hint": hint,
+    }
 
 
 def _stage_needs_main_thread(args: dict[str, Any]) -> bool:

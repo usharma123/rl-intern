@@ -90,6 +90,8 @@ class ExperimentPlan(BaseModel):
     @model_validator(mode="after")
     def validate_train_requirements(self) -> "ExperimentPlan":
         stage_names = {stage.name for stage in self.stages}
+        if self.domain == "gym_sb3" and not self.inputs.get("env_id"):
+            raise ValueError("gym_sb3 plans require inputs.env_id")
         if "train" in stage_names:
             if "inspect" not in stage_names:
                 raise ValueError("train stage requires an inspect stage")

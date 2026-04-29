@@ -88,6 +88,7 @@ def test_generate_grpo_script_contains_reward_func():
 def test_generate_sft_script_logs_phases_and_limits_samples():
     script = build_trl_training_script("sft")
 
+    compile(script, "train_trl.py", "exec")
     assert "--max-samples" in script
     assert "--fp16" in script
     assert "bf16=args.bf16" in script
@@ -96,6 +97,19 @@ def test_generate_sft_script_logs_phases_and_limits_samples():
     assert "[rl-intern] loading model" in script
     assert "low_cpu_mem_usage=True" in script
     assert "sample_generations.json" in script
+
+
+def test_generate_sft_script_emits_defensible_eval_artifacts():
+    script = build_trl_training_script("sft")
+
+    assert "eval_dataset_info.json" in script
+    assert "base_generations.json" in script
+    assert "adapter_generations.json" in script
+    assert "eval_metrics.json" in script
+    assert "improvement_evidence.json" in script
+    assert "stop_at_sequences" in script
+    assert "### Human:" in script
+    assert "overlap_with_train" in script
 
 
 def test_failed_llm_inspect_blocks_train(tmp_path):
@@ -199,6 +213,10 @@ def test_llm_train_passes_script_args_to_modal(monkeypatch, tmp_path):
     assert script_args[script_args.index("--save-steps") + 1] == "5"
     assert "--fp16" in script_args
     assert "--bf16" not in script_args
+    assert script_args[script_args.index("--eval-samples") + 1] == "20"
+    assert script_args[script_args.index("--max-new-tokens") + 1] == "128"
+    assert script_args[script_args.index("--improvement-threshold-pct") + 1] == "1.0"
+    assert "--stop-sequence" in script_args
 
 
 def test_llm_train_defaults_fp16_on_modal_t4(monkeypatch, tmp_path):
@@ -286,6 +304,79 @@ def test_llm_evaluate_reads_modal_sample_generations(tmp_path):
     assert result["samples"][0]["completion"] == "c"
 
 
+def test_llm_evaluate_builds_improvement_verdict_from_modal_metrics(tmp_path):
+    output = tmp_path / "modal_artifacts" / "sft_output"
+    output.mkdir(parents=True)
+    (output / "sample_generations.json").write_text(
+        '{"status": "completed", "samples": [{"prompt": "p", "completion": "adapter", "score": null}]}',
+        encoding="utf-8",
+    )
+    (output / "base_generations.json").write_text(
+        '{"status": "completed", "samples": [{"prompt": "p", "completion": "base"}]}',
+        encoding="utf-8",
+    )
+    (output / "adapter_generations.json").write_text(
+        '{"status": "completed", "samples": [{"prompt": "p", "completion": "adapter"}]}',
+        encoding="utf-8",
+    )
+    (output / "eval_metrics.json").write_text(
+        '{"status": "completed", "base": {"loss": 2.0, "perplexity": 7.4, "examples": 20}, '
+        '"adapter": {"loss": 1.8, "perplexity": 6.0, "examples": 20}}',
+        encoding="utf-8",
+    )
+    plan = ExperimentPlan(
+        plan_id="plan_test",
+        domain="llm_trl",
+        objective="tiny sft",
+        inputs={
+            "method": "sft",
+            "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            "dataset": "timdettmers/openassistant-guanaco",
+        },
+        stages=[StageSpec(name="inspect"), StageSpec(name="evaluate")],
+        expected_artifacts=["adapter"],
+    )
+
+    result = LLMTRLAdapter().evaluate(plan, run_dir=str(tmp_path))
+    evidence = result["improvement_evidence"]
+
+    assert evidence["verdict"] == "improved"
+    assert result["metrics"]["improvement_verdict"] == "improved"
+    assert result["base_samples"][0]["completion"] == "base"
+    assert result["adapter_samples"][0]["completion"] == "adapter"
+    assert (tmp_path / "improvement_evidence.json").exists()
+
+
+def test_llm_evaluate_marks_regression_from_modal_metrics(tmp_path):
+    output = tmp_path / "modal_artifacts" / "sft_output"
+    output.mkdir(parents=True)
+    (output / "sample_generations.json").write_text(
+        '{"status": "completed", "samples": [{"prompt": "p", "completion": "adapter", "score": null}]}',
+        encoding="utf-8",
+    )
+    (output / "eval_metrics.json").write_text(
+        '{"status": "completed", "base": {"loss": 1.0, "perplexity": 2.7, "examples": 20}, '
+        '"adapter": {"loss": 1.2, "perplexity": 3.3, "examples": 20}}',
+        encoding="utf-8",
+    )
+    plan = ExperimentPlan(
+        plan_id="plan_test",
+        domain="llm_trl",
+        objective="tiny sft",
+        inputs={
+            "method": "sft",
+            "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            "dataset": "timdettmers/openassistant-guanaco",
+        },
+        stages=[StageSpec(name="inspect"), StageSpec(name="evaluate")],
+        expected_artifacts=["adapter"],
+    )
+
+    result = LLMTRLAdapter().evaluate(plan, run_dir=str(tmp_path))
+
+    assert result["improvement_evidence"]["verdict"] == "regressed"
+
+
 def test_llm_report_includes_sample_generation(tmp_path):
     (tmp_path / "llm_dataset_inspect.json").write_text('{"valid": true}', encoding="utf-8")
     (tmp_path / "llm_smoke_test.json").write_text('{"passed": true}', encoding="utf-8")
@@ -313,3 +404,75 @@ def test_llm_report_includes_sample_generation(tmp_path):
     assert result["report_path"].endswith("llm_report.md")
     assert "Sample Generations" in report
     assert "Completion: c" in report
+
+
+def test_llm_report_does_not_overclaim_without_evidence(tmp_path):
+    (tmp_path / "llm_dataset_inspect.json").write_text('{"valid": true}', encoding="utf-8")
+    (tmp_path / "llm_smoke_test.json").write_text('{"passed": true}', encoding="utf-8")
+    (tmp_path / "llm_eval.json").write_text(
+        '{"metrics": {"status": "completed", "sample_count": 1}, '
+        '"samples": [{"prompt": "p", "completion": "c"}]}',
+        encoding="utf-8",
+    )
+    plan = ExperimentPlan(
+        plan_id="plan_test",
+        domain="llm_trl",
+        objective="tiny sft",
+        inputs={
+            "method": "sft",
+            "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            "dataset": "timdettmers/openassistant-guanaco",
+        },
+        stages=[StageSpec(name="inspect"), StageSpec(name="report")],
+        expected_artifacts=["adapter"],
+    )
+
+    LLMTRLAdapter().report(plan, run_dir=str(tmp_path))
+    report = (tmp_path / "llm_report.md").read_text(encoding="utf-8")
+
+    assert "Improvement verdict: `inconclusive`" in report
+    assert "model improvement is not established" in report
+    assert "Fine-tuning improved the model" not in report
+
+
+def test_llm_report_includes_base_vs_adapter_metrics_and_training_state(tmp_path):
+    output = tmp_path / "modal_artifacts" / "sft_output"
+    state_dir = output / "checkpoint-5"
+    state_dir.mkdir(parents=True)
+    (tmp_path / "llm_dataset_inspect.json").write_text('{"valid": true}', encoding="utf-8")
+    (tmp_path / "llm_smoke_test.json").write_text('{"passed": true}', encoding="utf-8")
+    (tmp_path / "llm_eval.json").write_text(
+        '{"metrics": {"status": "completed", "sample_count": 1}, '
+        '"eval_metrics": {"base": {"loss": 2.0, "perplexity": 7.4, "examples": 20}, '
+        '"adapter": {"loss": 1.8, "perplexity": 6.0, "examples": 20}}, '
+        '"improvement_evidence": {"verdict": "improved", "reason": "Adapter held-out loss improved by 10.00%."}, '
+        '"base_samples": [{"prompt": "p", "completion": "base"}], '
+        '"adapter_samples": [{"prompt": "p", "completion": "adapter"}], '
+        '"samples": [{"prompt": "p", "completion": "adapter"}]}',
+        encoding="utf-8",
+    )
+    (state_dir / "trainer_state.json").write_text(
+        '{"log_history": [{"step": 1, "loss": 1.5, "learning_rate": 0.0002, "mean_token_accuracy": 0.62}]}',
+        encoding="utf-8",
+    )
+    plan = ExperimentPlan(
+        plan_id="plan_test",
+        domain="llm_trl",
+        objective="tiny sft",
+        inputs={
+            "method": "sft",
+            "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            "dataset": "timdettmers/openassistant-guanaco",
+        },
+        stages=[StageSpec(name="inspect"), StageSpec(name="report")],
+        expected_artifacts=["adapter"],
+    )
+
+    LLMTRLAdapter().report(plan, run_dir=str(tmp_path))
+    report = (tmp_path / "llm_report.md").read_text(encoding="utf-8")
+
+    assert "Improvement verdict: `improved`" in report
+    assert "| Base | 2.0000 | 7.4000 | 20 |" in report
+    assert "| Adapter | 1.8000 | 6.0000 | 20 |" in report
+    assert "| 1 | 1.5000 | 0.0002 | 0.6200 |" in report
+    assert "Base vs Adapter Samples" in report

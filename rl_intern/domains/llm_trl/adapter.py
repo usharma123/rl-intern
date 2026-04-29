@@ -111,19 +111,34 @@ class LLMTRLAdapter(DomainAdapter):
         if blocked:
             return blocked
         generation_result = _read_modal_sample_generations(run_dir)
+        base_generations = _read_modal_json(run_dir, "base_generations.json")
+        adapter_generations = _read_modal_json(run_dir, "adapter_generations.json")
+        eval_metrics = _read_modal_json(run_dir, "eval_metrics.json")
+        eval_dataset = _read_modal_json(run_dir, "eval_dataset_info.json")
+        evidence = _read_modal_json(run_dir, "improvement_evidence.json")
         samples = generation_result.get("samples") or _default_eval_prompts()
         status = generation_result.get("status", "pending_generation")
+        if eval_metrics and not evidence:
+            evidence = _build_improvement_evidence(eval_metrics, _improvement_threshold_pct(plan))
         result = {
             "method": _method(plan),
             "model": _input(plan, "model"),
             "samples": samples,
+            "base_samples": base_generations.get("samples", []),
+            "adapter_samples": adapter_generations.get("samples", samples),
+            "eval_metrics": eval_metrics,
+            "eval_dataset": eval_dataset,
+            "improvement_evidence": evidence or _missing_evidence(),
             "metrics": {
                 "status": status,
                 "sample_count": len(samples),
                 "source": generation_result.get("path", "default_prompts"),
+                "improvement_verdict": (evidence or {}).get("verdict", "inconclusive"),
             },
         }
         _write_json(run_dir, "llm_eval.json", result, "metrics")
+        if evidence:
+            _write_json(run_dir, "improvement_evidence.json", evidence, "metrics")
         if run_dir:
             append_manifest_item(
                 run_dir,
@@ -139,6 +154,13 @@ class LLMTRLAdapter(DomainAdapter):
         dataset = _read_json(run_dir, "llm_dataset_inspect.json")
         smoke = _read_json(run_dir, "llm_smoke_test.json")
         eval_result = _read_json(run_dir, "llm_eval.json")
+        trainer_state = _read_modal_json(run_dir, "trainer_state.json")
+        eval_metrics = eval_result.get("eval_metrics") or _read_modal_json(run_dir, "eval_metrics.json")
+        evidence = eval_result.get("improvement_evidence") or _read_json(run_dir, "improvement_evidence.json")
+        if eval_metrics and not evidence:
+            evidence = _build_improvement_evidence(eval_metrics, _improvement_threshold_pct(plan))
+        evidence = evidence or _missing_evidence()
+        verdict = evidence.get("verdict", "inconclusive")
         report = [
             "# LLM TRL Experiment Report",
             "",
@@ -149,7 +171,19 @@ class LLMTRLAdapter(DomainAdapter):
             f"- Smoke test: `{smoke.get('passed')}`",
             f"- Eval status: `{eval_result.get('metrics', {}).get('status', 'unknown')}`",
             f"- Eval samples: `{eval_result.get('metrics', {}).get('sample_count', 0)}`",
+            f"- Improvement verdict: `{verdict}`",
+            f"- Improvement claim: {_claim_sentence(evidence)}",
         ]
+        if evidence.get("reason"):
+            report.append(f"- Verdict reason: {evidence['reason']}")
+        warnings = evidence.get("warnings") or []
+        if warnings:
+            report.append(f"- Evidence warnings: {'; '.join(str(w) for w in warnings)}")
+        report.extend(_metrics_table(eval_metrics))
+        training_rows = _training_metrics_rows(trainer_state)
+        if training_rows:
+            report.extend(["", "## Training Metrics", "", "| Step | Loss | Learning Rate | Token Accuracy |", "| --- | ---: | ---: | ---: |"])
+            report.extend(training_rows)
         samples = eval_result.get("samples") or []
         if samples:
             report.extend(["", "## Sample Generations", ""])
@@ -166,6 +200,30 @@ class LLMTRLAdapter(DomainAdapter):
                         "",
                     ]
                 )
+        base_samples = eval_result.get("base_samples") or []
+        adapter_samples = eval_result.get("adapter_samples") or []
+        if base_samples and adapter_samples:
+            report.extend(["", "## Base vs Adapter Samples", ""])
+            for idx, (base, adapter) in enumerate(zip(base_samples[:3], adapter_samples[:3]), start=1):
+                prompt = str(adapter.get("prompt") or base.get("prompt") or "").replace("\n", " ")
+                base_completion = str(base.get("completion", "")).replace("\n", " ")
+                adapter_completion = str(adapter.get("completion", "")).replace("\n", " ")
+                report.extend(
+                    [
+                        f"### Comparison {idx}",
+                        "",
+                        f"Prompt: {prompt}",
+                        "",
+                        f"Base: {base_completion}",
+                        "",
+                        f"Adapter: {adapter_completion}",
+                        "",
+                    ]
+                )
+        artifact_paths = _evidence_artifact_paths(run_dir)
+        if artifact_paths:
+            report.extend(["", "## Evidence Artifacts", ""])
+            report.extend(f"- `{path}`" for path in artifact_paths)
         if _method(plan) == "grpo":
             verifier = _read_json(run_dir, "llm_grpo_verifier.json")
             report.append(f"- GRPO verifier valid: `{verifier.get('valid')}`")
@@ -186,8 +244,16 @@ class LLMTRLAdapter(DomainAdapter):
     def artifact_schema(self) -> dict[str, Any]:
         return {
             "adapters": ["llm_output/adapter"],
-            "metrics": ["llm_eval.json", "metrics.json", "llm_dataset_inspect.json"],
-            "samples": ["llm_eval.json"],
+            "metrics": [
+                "llm_eval.json",
+                "metrics.json",
+                "eval_metrics.json",
+                "improvement_evidence.json",
+                "eval_dataset_info.json",
+                "trainer_state.json",
+                "llm_dataset_inspect.json",
+            ],
+            "samples": ["llm_eval.json", "base_generations.json", "adapter_generations.json", "sample_generations.json"],
             "reports": ["llm_report.md"],
             "configs": ["train_trl.py", "llm_training_config.json"],
         }
@@ -268,6 +334,20 @@ def _script_args(plan: ExperimentPlan, run_dir: str | None) -> list[str]:
     ]
     if plan.inputs.get("save_steps") is not None:
         args.extend(["--save-steps", str(plan.inputs["save_steps"])])
+    args.extend(
+        [
+            "--eval-split",
+            str(plan.inputs.get("eval_split", "test")),
+            "--eval-samples",
+            str(plan.inputs.get("eval_samples", 20)),
+            "--max-new-tokens",
+            str(plan.inputs.get("max_new_tokens", 128)),
+            "--improvement-threshold-pct",
+            str(_improvement_threshold_pct(plan)),
+        ]
+    )
+    for stop in plan.inputs.get("stop_sequences", ["### Human:", "\n### Human:"]):
+        args.extend(["--stop-sequence", str(stop)])
     if bool(plan.inputs.get("fp16")) or _default_fp16(plan):
         args.append("--fp16")
     if bool(plan.inputs.get("bf16")):
@@ -306,6 +386,22 @@ def _read_json(run_dir: str | None, filename: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _read_modal_json(run_dir: str | None, filename: str) -> dict[str, Any]:
+    if not run_dir:
+        return {}
+    root = Path(run_dir) / "modal_artifacts"
+    if not root.exists():
+        return {}
+    for path in sorted(root.glob(f"**/{filename}")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        payload.setdefault("path", str(path))
+        return payload
+    return {}
+
+
 def _read_modal_sample_generations(run_dir: str | None) -> dict[str, Any]:
     if not run_dir:
         return {}
@@ -339,4 +435,150 @@ def _blocked_by_failed_inspect(run_dir: str | None) -> dict[str, Any] | None:
             "error": "Cannot continue after failed LLM dataset inspection.",
             "inspect": inspect_result,
         }
+    return None
+
+
+def _improvement_threshold_pct(plan: ExperimentPlan) -> float:
+    try:
+        return float(plan.inputs.get("improvement_threshold_pct", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _missing_evidence() -> dict[str, Any]:
+    return {
+        "verdict": "inconclusive",
+        "reason": "No base-vs-adapter held-out evaluation artifacts were found.",
+        "warnings": ["Sample generations alone are qualitative and do not prove improvement."],
+    }
+
+
+def _metric_value(payload: dict[str, Any], model_key: str, metric_key: str) -> float | None:
+    value = (payload.get(model_key) or {}).get(metric_key)
+    return value if isinstance(value, int | float) else None
+
+
+def _build_improvement_evidence(eval_metrics: dict[str, Any], threshold_pct: float) -> dict[str, Any]:
+    base_loss = _metric_value(eval_metrics, "base", "loss")
+    adapter_loss = _metric_value(eval_metrics, "adapter", "loss")
+    warnings: list[str] = []
+    if base_loss is None or adapter_loss is None:
+        return {
+            "verdict": "inconclusive",
+            "reason": "Held-out loss was not available for both base and adapter models.",
+            "warnings": warnings,
+        }
+    base_examples = _metric_value(eval_metrics, "base", "examples") or 0
+    adapter_examples = _metric_value(eval_metrics, "adapter", "examples") or 0
+    if base_examples < 3 or adapter_examples < 3:
+        warnings.append("Very small eval sample count; treat this as a smoke signal, not proof.")
+    delta = adapter_loss - base_loss
+    pct = ((base_loss - adapter_loss) / base_loss * 100.0) if base_loss else 0.0
+    if pct >= threshold_pct:
+        verdict = "improved"
+        reason = f"Adapter held-out loss improved by {pct:.2f}%."
+    elif pct <= -threshold_pct:
+        verdict = "regressed"
+        reason = f"Adapter held-out loss worsened by {abs(pct):.2f}%."
+    else:
+        verdict = "inconclusive"
+        reason = f"Loss delta {pct:.2f}% is below the {threshold_pct:.2f}% threshold."
+    return {
+        "verdict": verdict,
+        "reason": reason,
+        "base_loss": base_loss,
+        "adapter_loss": adapter_loss,
+        "delta_loss": delta,
+        "delta_loss_pct": pct,
+        "threshold_pct": threshold_pct,
+        "warnings": warnings,
+    }
+
+
+def _claim_sentence(evidence: dict[str, Any]) -> str:
+    verdict = evidence.get("verdict")
+    if verdict == "improved":
+        return "Fine-tuning improved the model on the configured held-out metric."
+    if verdict == "regressed":
+        return "Fine-tuning regressed the model on the configured held-out metric."
+    return "Training succeeded only if the train stage passed; model improvement is not established."
+
+
+def _fmt_metric(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.4f}"
+    if isinstance(value, int):
+        return str(value)
+    return "n/a"
+
+
+def _metrics_table(eval_metrics: dict[str, Any]) -> list[str]:
+    if not eval_metrics:
+        return [
+            "",
+            "## Base vs Adapter Metrics",
+            "",
+            "No held-out base-vs-adapter metrics were found.",
+        ]
+    base = eval_metrics.get("base") or {}
+    adapter = eval_metrics.get("adapter") or {}
+    return [
+        "",
+        "## Base vs Adapter Metrics",
+        "",
+        "| Model | Loss | Perplexity | Examples |",
+        "| --- | ---: | ---: | ---: |",
+        f"| Base | {_fmt_metric(base.get('loss'))} | {_fmt_metric(base.get('perplexity'))} | {_fmt_metric(base.get('examples'))} |",
+        f"| Adapter | {_fmt_metric(adapter.get('loss'))} | {_fmt_metric(adapter.get('perplexity'))} | {_fmt_metric(adapter.get('examples'))} |",
+    ]
+
+
+def _training_metrics_rows(trainer_state: dict[str, Any]) -> list[str]:
+    rows = []
+    for item in trainer_state.get("log_history", []):
+        if "loss" not in item:
+            continue
+        token_accuracy = item.get("mean_token_accuracy", item.get("token_accuracy"))
+        rows.append(
+            "| {step} | {loss} | {lr} | {acc} |".format(
+                step=_fmt_metric(item.get("step")),
+                loss=_fmt_metric(item.get("loss")),
+                lr=_fmt_metric(item.get("learning_rate")),
+                acc=_fmt_metric(token_accuracy),
+            )
+        )
+    return rows
+
+
+def _evidence_artifact_paths(run_dir: str | None) -> list[str]:
+    if not run_dir:
+        return []
+    names = [
+        "eval_dataset_info.json",
+        "eval_metrics.json",
+        "improvement_evidence.json",
+        "base_generations.json",
+        "adapter_generations.json",
+        "sample_generations.json",
+        "trainer_state.json",
+    ]
+    root = Path(run_dir)
+    paths = []
+    for name in names:
+        local = root / name
+        if local.exists():
+            paths.append(str(local))
+            continue
+        modal = _find_modal_file(run_dir, name)
+        if modal:
+            paths.append(str(modal))
+    return paths
+
+
+def _find_modal_file(run_dir: str, filename: str) -> Path | None:
+    root = Path(run_dir) / "modal_artifacts"
+    if not root.exists():
+        return None
+    for path in sorted(root.glob(f"**/{filename}")):
+        return path
     return None

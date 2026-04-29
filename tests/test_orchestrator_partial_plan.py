@@ -58,6 +58,43 @@ def test_llm_use_modal_inputs_normalize_runner(tmp_path):
     assert created["runner"]["hardware"] == "gpu-t4"
 
 
+def test_create_experiment_plan_adds_inspect_before_train(tmp_path):
+    created = create_experiment_plan(
+        domain="llm_trl",
+        objective="tiny sft",
+        inputs={"method": "sft", "model": "m", "dataset": "d"},
+        stages=["prepare", "train", "evaluate", "report"],
+        run_dir=str(tmp_path),
+    )
+
+    assert [stage["name"] for stage in created["stages"]] == [
+        "inspect",
+        "prepare",
+        "train",
+        "evaluate",
+        "report",
+    ]
+
+
+def test_create_experiment_plan_handler_returns_validation_errors():
+    output, success = asyncio.run(
+        orchestrator.create_experiment_plan_handler(
+            {
+                "domain": "llm_trl",
+                "objective": "bad grpo",
+                "inputs": {"method": "grpo", "model": "m", "dataset": "d"},
+                "stages": ["inspect", "train"],
+                "reward": {"type": "none"},
+                "expected_artifacts": ["adapter"],
+            }
+        )
+    )
+
+    assert success is False
+    assert "python_verifier" in output
+    assert "hint" in output
+
+
 def test_partial_plan_preserves_saved_modal_runner(tmp_path):
     created = create_experiment_plan(
         domain="llm_trl",
@@ -125,6 +162,28 @@ def test_run_experiment_stage_handler_treats_running_job_as_success(monkeypatch,
 
     assert success is True
     assert '"status": "running"' in output
+
+
+def test_run_experiment_stage_handler_returns_gym_missing_env_id_error():
+    output, success = asyncio.run(
+        run_experiment_stage_handler(
+            {
+                "plan": {
+                    "plan_id": "plan_bad",
+                    "domain": "gym_sb3",
+                    "objective": "train a gym env",
+                    "inputs": {},
+                    "stages": [{"name": "inspect"}],
+                    "expected_artifacts": ["model.zip"],
+                },
+                "stage": "inspect",
+            }
+        )
+    )
+
+    assert success is False
+    assert "inputs.env_id" in output
+    assert "CartPole-v1" in output
 
 
 def test_artifact_manifest_handler_returns_summary_not_full_context(tmp_path):
