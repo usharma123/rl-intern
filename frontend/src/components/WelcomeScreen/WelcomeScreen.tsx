@@ -206,7 +206,7 @@ export default function WelcomeScreen() {
             size="small"
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            placeholder="openrouter/anthropic/claude-sonnet-4.5"
+            placeholder="openrouter/openai/gpt-oss-120b:free"
             spellCheck={false}
             slotProps={{
               htmlInput: { autoCorrect: 'off', autoCapitalize: 'off' },

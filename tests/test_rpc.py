@@ -75,3 +75,44 @@ def test_rpc_start_user_input_and_shutdown(tmp_path):
     finally:
         proc.terminate()
         proc.wait(timeout=5)
+
+
+def test_rpc_normalizes_openrouter_model_alias(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo_root)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "rl_intern.rpc"],
+        cwd=tmp_path,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        proc.stdin.write(
+            json.dumps(
+                {
+                    "type": "start_run",
+                    "id": "start",
+                    "model": "openai/gpt-oss-120b:free",
+                    "max_iterations": 0,
+                }
+            )
+            + "\n"
+        )
+        proc.stdin.flush()
+        ready = _read_json_line(proc)
+        assert ready["type"] == "ready"
+        metadata_path = tmp_path / "artifacts" / "runs" / ready["run_id"] / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        assert metadata["model"] == "openrouter/openai/gpt-oss-120b:free"
+
+        proc.stdin.write(json.dumps({"type": "shutdown", "id": "s1"}) + "\n")
+        proc.stdin.flush()
+        shutdown = _read_json_line(proc)
+        assert shutdown["type"] in {"shutdown", "shutdown_complete"}
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)

@@ -7,7 +7,7 @@ from typing import Any
 
 from litellm import ChatCompletionMessageToolCall, Message, acompletion
 
-from agent.config import Config
+from agent.config import Config, normalize_model_name
 from agent.core.doom_loop import check_for_doom_loop
 from agent.core.session import Event, OpType, Session
 from agent.core.tools import ToolRouter
@@ -18,7 +18,7 @@ ToolCall = ChatCompletionMessageToolCall
 
 
 def _resolve_llm_params(model_name: str) -> dict[str, Any]:
-    return {"model": model_name}
+    return {"model": normalize_model_name(model_name)}
 
 
 def _validate_tool_args(tool_args: dict[str, Any]) -> tuple[bool, str | None]:
@@ -513,23 +513,31 @@ async def _execute_tools(
         )
 
     async def run_one(tc: ToolCall, name: str, args: dict[str, Any]):
-        output, success = await session.tool_router.call_tool(
-            name,
-            args,
-            session=session,
-            tool_call_id=tc.id,
-        )
+        try:
+            output, success = await session.tool_router.call_tool(
+                name,
+                args,
+                session=session,
+                tool_call_id=tc.id,
+            )
+        except Exception as exc:
+            logger.exception("Tool execution failed")
+            output = json.dumps(
+                {
+                    "error": str(exc),
+                    "tool": name,
+                    "hint": "Fix the tool arguments before retrying; do not repeat the same invalid call.",
+                },
+                sort_keys=True,
+            )
+            success = False
         return tc, name, args, output, success
 
     results = await asyncio.gather(
-        *[run_one(tc, name, args) for tc, name, args in prepared_tools],
-        return_exceptions=True,
+        *[run_one(tc, name, args) for tc, name, args in prepared_tools]
     )
 
     for result in results:
-        if isinstance(result, Exception):
-            logger.exception("Tool execution failed", exc_info=result)
-            continue
         tc, name, args, output, success = result
         session.context_manager.add_message(
             Message(role="tool", content=output, tool_call_id=tc.id, name=name)

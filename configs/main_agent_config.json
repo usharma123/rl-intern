@@ -1,5 +1,5 @@
 {
-  "model_name": "anthropic/claude-sonnet-4-5-20250929",
+  "model_name": "openrouter/openai/gpt-oss-120b:free",
   "save_sessions": false,
   "yolo_mode": false,
   "max_iterations": 50

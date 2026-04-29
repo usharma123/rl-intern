@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
-from agent.config import Config
+from agent.config import Config, normalize_model_name
 from agent.context_manager.manager import ContextManager
 from litellm import ChatCompletionMessageToolCall, Message
 from rl_intern.events import normalize_event
@@ -110,8 +110,8 @@ class Session:
         return self._cancelled.is_set()
 
     def update_model(self, model_name: str) -> None:
-        self.config.model_name = model_name
-        self.context_manager.max_context = _get_max_tokens_safe(model_name)
+        self.config.model_name = normalize_model_name(model_name)
+        self.context_manager.max_context = _get_max_tokens_safe(self.config.model_name)
 
     def increment_turn(self) -> None:
         self.turn_count += 1

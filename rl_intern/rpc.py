@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from agent.config import load_config
+from agent.config import load_config, normalize_model_name
 from agent.core.agent_loop import submission_loop
 from agent.core.session import Event, OpType
 from agent.core.tools import ToolRouter
@@ -106,7 +106,7 @@ class RpcRuntime:
 
         config = load_config()
         if message.get("model"):
-            config.model_name = message["model"]
+            config.model_name = normalize_model_name(message["model"])
         if message.get("runner"):
             config.runner = message["runner"]
         if message.get("max_iterations") is not None:

@@ -5,18 +5,33 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_MODEL_ALIASES = {
+    "nvidia/nemotron-3-nano-30b-a3b:free": "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
+    "google/gemma-4-26b-a4b-it:free": "openrouter/google/gemma-4-26b-a4b-it:free",
+    "openai/gpt-oss-120b:free": "openrouter/openai/gpt-oss-120b:free",
+}
+
+
+def normalize_model_name(model_name: str) -> str:
+    normalized = model_name.strip()
+    return _MODEL_ALIASES.get(normalized, normalized)
 
 
 class Config(BaseModel):
-    model_name: str = "anthropic/claude-sonnet-4-5-20250929"
+    model_name: str = "openrouter/openai/gpt-oss-120b:free"
     save_sessions: bool = False
     yolo_mode: bool = False
     max_iterations: int = 50
     runner: str = "local"
+
+    @field_validator("model_name")
+    @classmethod
+    def _normalize_model_name(cls, model_name: str) -> str:
+        return normalize_model_name(model_name)
 
 
 def substitute_env_vars(obj: Any) -> Any:

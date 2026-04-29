@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 import litellm
 
-from agent.config import load_config
+from agent.config import load_config, normalize_model_name
 from agent.core.agent_loop import submission_loop
 from agent.core.session import OpType
 from agent.core.tools import ToolRouter
@@ -48,7 +48,7 @@ async def _run_agent_prompt(
 ) -> None:
     config = load_config()
     if model:
-        config.model_name = model
+        config.model_name = normalize_model_name(model)
     config.runner = runner
     if max_iterations is not None:
         config.max_iterations = max_iterations

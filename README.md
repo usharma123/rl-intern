@@ -26,7 +26,7 @@ Use OpenRouter through LiteLLM:
 
 ```bash
 export OPENROUTER_API_KEY="..."
-rl-intern --model openrouter/anthropic/claude-sonnet-4.5 "inspect CartPole-v1"
+rl-intern --model openrouter/openai/gpt-oss-120b:free "inspect CartPole-v1"
 ```
 
 ## Optional Modal Runner
@@ -38,7 +38,7 @@ Gymnasium/Stable-Baselines3 jobs.
 uv sync --extra modal
 modal setup
 uv run modal deploy rl_intern/modal_jobs/sb3.py
-uv run rl-intern --runner modal --model openrouter/anthropic/claude-sonnet-4.5 \
+uv run rl-intern --runner modal --model openrouter/openai/gpt-oss-120b:free \
   "train PPO on CartPole-v1 for 10000 timesteps, evaluate it for 20 episodes, record a rollout, and generate a report"
 ```
 
