@@ -4,7 +4,7 @@ The agent that trains agents.
 
 `rl-intern` is a local web app for running reinforcement learning experiments from a chat interface. The React frontend talks to a local FastAPI run server, which launches the agent runtime, streams tool events over WebSocket, manages approvals, runs local or Modal-backed jobs, and stores reports and artifacts for each run.
 
-## Current Capabilities
+## Current capabilities
 
 - Chat-driven experiment planning and execution
 - Local Gymnasium + Stable-Baselines3 workflows
@@ -17,29 +17,29 @@ The agent that trains agents.
 ## Prerequisites
 
 - Python 3.11+
-- `uv`
-- Bun 1.3+
-- Modal account and CLI authentication for Modal jobs
+- [uv](https://docs.astral.sh/uv/)
+- [Bun](https://bun.sh/) 1.3+ (repo pins `packageManager` in `frontend/package.json`)
+- Modal account and CLI authentication for Modal jobs (`bun run setup` runs `modal setup` when needed)
 - OpenRouter API key for the default agent model
-- Hugging Face token for model or dataset access
+- Hugging Face token when you pull private models or datasets
 
-## Quick Start
+## Quick start
 
 ```bash
-git clone <repo>
+git clone https://github.com/usharma123/rl-intern.git
 cd rl-intern/frontend
 bun install
 bun run setup
 bun run dev
 ```
 
-Then open http://localhost:5173.
+Then open http://localhost:5173 (or http://127.0.0.1:5173 — the dev script binds Vite to `127.0.0.1`).
 
-`bun run dev` starts the local run server on `127.0.0.1:8765` if it is not already running, then starts the Vite frontend.
+`bun run dev` starts `rl-intern-server` on `127.0.0.1:8765` (or `RL_INTERN_SERVER_PORT`) if health checks fail, then starts the Vite frontend.
 
-## One-Time Setup
+## One-time setup
 
-Run setup from the frontend directory:
+Run setup from the `frontend/` directory:
 
 ```bash
 cd frontend
@@ -51,8 +51,8 @@ The setup script:
 - runs `uv sync --extra server --extra modal --extra llm`
 - creates or updates the repo-root `.env`
 - configures `OPENROUTER_API_KEY`
-- configures both `HF_TOKEN` and `HUGGINGFACE_HUB_TOKEN`
-- sets `RL_INTERN_DEFAULT_MODEL` if it is missing
+- configures both `HF_TOKEN` and `HUGGINGFACE_HUB_TOKEN` from one prompt
+- sets `RL_INTERN_DEFAULT_MODEL` if it is missing (default: `openrouter/anthropic/claude-sonnet-4.5`)
 - runs `modal setup` when Modal is not authenticated
 - deploys `rl_intern/modal_jobs/generic.py`
 - deploys `rl_intern/modal_jobs/sb3.py`
@@ -63,7 +63,13 @@ Existing `.env` values are preserved. To re-enter setup values:
 bun run setup -- --force
 ```
 
-## Daily Development
+**Tests:** setup does **not** install the `dev` extra (pytest lives there). Sync once before running Python tests:
+
+```bash
+uv sync --extra server --extra modal --extra llm --extra dev
+```
+
+## Daily development
 
 Start the full local app:
 
@@ -76,7 +82,8 @@ Useful frontend commands:
 
 ```bash
 cd frontend
-bun run dev:frontend
+bun run dev:frontend   # Vite only (expects API already reachable at VITE_RL_INTERN_API_URL)
+bun run dev:full       # alias of dev.ts (same as bun run dev)
 bun run build
 bun run lint
 bun run preview
@@ -85,14 +92,14 @@ bun run preview
 Useful Python commands:
 
 ```bash
-uv sync --extra server --extra modal --extra llm
-uv run pytest
+uv sync --extra server --extra modal --extra llm [--extra dev]
 uv run rl-intern-server --host 127.0.0.1 --port 8765
+uv run pytest   # requires --extra dev sync
 ```
 
 ## Configuration
 
-Runtime configuration is loaded from `.env` and `configs/main_agent_config.json`.
+Runtime configuration is loaded from `.env` at the repo root and `configs/main_agent_config.json`.
 
 Common environment variables:
 
@@ -110,10 +117,11 @@ If `RL_INTERN_DEFAULT_MODEL` is set, it overrides the model in `configs/main_age
 ## Architecture
 
 ```text
-frontend/                    React + Vite + MUI chat UI
+frontend/                    React 19 + Vite + MUI chat UI
 frontend/scripts/            Bun setup and dev orchestration
 rl_intern/server/            FastAPI run server and WebSocket bridge
 rl_intern/rpc.py             newline-delimited JSON runtime bridge
+rl_intern/viewer/            bundled HTML viewer for run logs
 agent/core/                  agent loop, sessions, tool routing
 agent/tools/                 built-in RL, Modal, file, and research tools
 rl_intern/orchestrator/      typed experiment plans and domain adapters
@@ -123,9 +131,14 @@ rl_intern/runners/           local and Modal execution backends
 rl_intern/modal_jobs/        deployed Modal apps
 ```
 
-The browser opens `/api/ws/chat` with a session id. The server spawns `python -m rl_intern.rpc`, forwards browser messages to the agent runtime, and streams normalized events back to the UI.
+Typical browser flow:
 
-## Experiment Domains
+1. `POST /api/session` allocates a run id used as `session_id`.
+2. The client opens `/api/ws/chat?session_id=...` (optional `model`, `runner` query params).
+
+The server spawns `python -m rl_intern.rpc`, forwards browser messages to the agent runtime, and streams normalized events back to the UI. Subprocess stderr is filtered and surfaced as synthetic `bridge_log` events.
+
+## Experiment domains
 
 ### `gym_sb3`
 
@@ -156,7 +169,7 @@ The LLM/TRL adapter supports:
 
 Common artifacts include `train_trl.py`, `llm_training_config.json`, `llm_eval.json`, `improvement_evidence.json`, `evaluation_summary.json`, `llm_report.md`, and Modal output under `modal_artifacts/`.
 
-## Run Artifacts
+## Run artifacts
 
 Each run writes local state under:
 
@@ -179,7 +192,7 @@ modal_artifacts/
 
 The artifact manifest groups outputs into buckets such as `checkpoints`, `adapters`, `configs`, `metrics`, `logs`, `videos`, `reports`, `samples`, and `errors`.
 
-## Run Server API
+## Run server API
 
 The local server is intentionally bound to `127.0.0.1` or `localhost`.
 
@@ -200,7 +213,7 @@ GET    /runs/<run_id>/viewer
 
 ## Deprecated CLI
 
-The prompt CLI still exists for debugging, but normal use should go through the web app:
+The `uv run rl-intern` CLI still exists for debugging, but normal use should go through the web app:
 
 ```bash
 uv run rl-intern "inspect CartPole-v1"
@@ -209,13 +222,13 @@ uv run rl-intern --runner modal "train CartPole-v1 with PPO"
 
 ## Testing
 
-Run the Python test suite from the repo root:
+From the repo root, after `uv sync` **with** `--extra dev`:
 
 ```bash
 uv run pytest
 ```
 
-Run frontend checks from `frontend/`:
+Frontend checks from `frontend/`:
 
 ```bash
 bun run lint
